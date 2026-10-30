@@ -13,28 +13,16 @@
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
 
     <!-- CoolProp WebAssembly Configuration & Library -->
-    <script>
-        window.Module = {
-            // Force Emscripten to fetch the .wasm binary from the CDN instead of local relative paths
-            locateFile: function (path, prefix) {
-                if (path.endsWith('.wasm')) {
-                    return 'https://cdn.jsdelivr.net/npm/coolprop@6.4.1/' + path;
-                }
-                return prefix + path;
-            },
-            // Hook to flag when the C++ library is fully compiled and active in memory
-            onRuntimeInitialized: function () {
-                window.CoolPropReady = true;
-                console.log("CoolProp WebAssembly Engine Fully Loaded!");
-                const statusBadge = document.getElementById('thermo-status');
-                if (statusBadge) {
-                    statusBadge.textContent = "Thermo Engine: CoolProp WASM";
-                    statusBadge.style.color = "#a6e3a1";
-                }
-            }
-        };
+    <script type="module">
+        import CoolPropModule from 'https://cdn.jsdelivr.net/npm/coolprop-wasm@6.6.0/coolprop.js';
+        CoolPropModule().then(CP => {
+            window.CoolProp = CP;
+            window.CoolPropReady = true;
+            console.log("CoolProp WebAssembly Engine Fully Loaded!");
+            const badge = document.getElementById('thermo-status');
+            if (badge) { badge.textContent = "Thermo: CoolProp loaded"; badge.style.color = "#28a745"; }
+        }).catch(err => console.error("CoolProp failed to load: " + err.message));
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/coolprop@6.4.1/coolprop.js"></script>
 
     <style>
         /* CSS Reset and CSS Grid 2x3 Layout */
@@ -250,7 +238,8 @@
     <div class="container">
         <!-- Panel 1: Code/Equations Editor -->
         <div class="panel" id="editor-panel">
-            <h2>Equations</h2>
+            <h2>Equations <span id="thermo-status" style="font-size:11px; font-weight:normal; color:#c00;">Thermo:
+                    CoolProp not loaded</span></h2>
             <textarea id="editor" spellcheck="false">
 // EES Web Edition Demo
 // 1. Direct substitution & arrays
@@ -297,7 +286,7 @@ z = 0
         <div class="panel" id="parametric-panel">
             <h2>Parametric Table</h2>
             <div class="param-controls">
-                <label>Var: <input type="text" id="param-var" value="x[1]"></label>
+                <label>Var: <select id="param-var" style="width:90px;"></select></label>
                 <label>Start: <input type="number" id="param-start" value="1"></label>
                 <label>End: <input type="number" id="param-end" value="10"></label>
                 <label>Steps: <input type="number" id="param-steps" value="10"></label>
@@ -433,6 +422,13 @@ z = 0
                 consoleOutput.textContent += 'ERROR: ' + message + '\n';
                 consoleOutput.scrollTop = consoleOutput.scrollHeight;
                 originalError.apply(console, args);
+                const originalWarn = console.warn;
+                console.warn = function (...args) {
+                    const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+                    consoleOutput.textContent += 'WARNING: ' + message + '\n';
+                    consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                    originalWarn.apply(console, args);
+                };
             };
 
             // ==========================================
@@ -443,10 +439,11 @@ z = 0
             class ThermoEngine {
                 static propKeys = {
                     'enthalpy': 'H', 'entropy': 'S', 'temperature': 'T', 'pressure': 'P',
-                    'density': 'D', 'specificvolume': 'V', 'internalenergy': 'U', 'quality': 'Q'
+                    'density': 'D', 'specificvolume': 'V_SPEC', 'internalenergy': 'U', 'quality': 'Q'
                 };
 
                 // Analytical thermodynamic polynomial fallback for offline/loading stability
+                /*
                 static evaluateFallback(prop, fluid, p1Key, p1Val, p2Key, p2Val) {
                     const fluidLower = String(fluid).toLowerCase();
                     const pName = String(prop).toLowerCase();
@@ -481,7 +478,7 @@ z = 0
                     }
 
                     return NaN;
-                }
+                }*/
 
                 static evaluate(propName, fluidName, ...args) {
                     let p1Key = 'T', p1Val = 300, p2Key = 'P', p2Val = 101325;
@@ -504,18 +501,12 @@ z = 0
                     const cleanFluid = String(fluidName).trim();
                     const formattedFluid = cleanFluid.charAt(0).toUpperCase() + cleanFluid.slice(1).toLowerCase();
 
-                    // Check if CoolProp WebAssembly binary is fully compiled and ready in memory
-                    if (window.CoolPropReady && window.Module && typeof window.Module.PropsSI === 'function') {
-                        try {
-                            const val = window.Module.PropsSI(outKey, p1Key, p1Val, p2Key, p2Val, formattedFluid);
-                            if (!Number.isNaN(val)) return val;
-                        } catch (e) {
-                            // Silently fall back if the fluid/property combination throws an out-of-bounds error
-                        }
-                    }
-
-                    // Fallback to the analytical mathematical engine
-                    return ThermoEngine.evaluateFallback(propName, fluidName, p1Key, p1Val, p2Key, p2Val);
+                    if (!window.CoolPropReady) throw new Error('CoolProp is not loaded (still downloading its 6.5 MB WASM, or the CDN failed). Check the status badge.');
+                    const CP = window.CoolProp;
+                    const get = (k) => CP.PropsSI(k, p1Key, p1Val, p2Key, p2Val, cleanFluid);
+                    const val = (outKey === 'V_SPEC') ? 1 / get('D') : get(outKey);
+                    if (!Number.isFinite(val)) throw new Error('CoolProp: ' + CP.get_global_param_string('errstring'));
+                    return val;
                 }
             }
 
@@ -535,6 +526,8 @@ z = 0
                     this.rawEquations = [];
                     this.parsedASTs = [];
                     this.odeCalls = [];
+                    this.previousVariables = this.variables;
+                    this.variables = new Map();
 
                     let cleanText = text.replace(/\{[^}]*\}/g, '').replace(/\/\/.*/g, '');
                     const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -553,17 +546,16 @@ z = 0
 
                         // --- NEW: Extract EES-style inline units (e.g., x = 5 [kJ/kg]) ---
                         let inlineUnit = null;
-                        // Matches brackets at the end of a line. Ignores matrix syntax by excluding semicolons.
-                        const unitMatch = line.match(/\[([a-zA-Z0-9_\/\^\*\s\.\-]+)\]$/);
-                        if (unitMatch && !line.includes(';')) {
+                        const unitMatch = line.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z]|1\/)[a-zA-Z0-9_\/\^\*\s\.\-\(\)]*)\]\s*$/);
+                        if (unitMatch) {
                             inlineUnit = unitMatch[1].trim();
-                            line = line.replace(/\[.*?\]$/, '').trim();
+                            line = line.slice(0, unitMatch.index + 1).trim();
                         }
 
                         if (!line.includes('=')) throw new Error(`Missing '=' sign in '${line}'.`);
 
                         // Preprocess MATLAB Element-wise Operators
-                        let processedLine = line.replace(/\.\^/g, '^').replace(/\.\*/g, '*').replace(/\.\//g, '/');
+                        let processedLine = line;
                         const parts = processedLine.split('=');
 
                         try {
@@ -613,26 +605,31 @@ z = 0
                         }
                     });
 
-                    // Pass 2: Extract standard scalar variables while filtering out array base names and keywords
-                    node.traverse((child) => {
-                        if (child.isSymbolNode) {
-                            if (arrayBases.has(child.name)) return;
-
-                            const isCoolPropFunc = ThermoEngine.propKeys[child.name.toLowerCase()] !== undefined;
-                            if (typeof math[child.name] === 'undefined' && !isCoolPropFunc &&
-                                !['water', 'air', 'r134a', 't', 'p', 'h', 's'].includes(child.name.toLowerCase()) &&
-                                child.name !== 'i' && child.name !== 'e') {
-                                this.registerVariable(child.name);
-                                if (varSet) varSet.add(child.name);
-                            }
+                    // Pass 2: every symbol that is not a function name, array base, or constant is a variable
+                    const RESERVED = new Set(['pi', 'e', 'i', 'Infinity', 'NaN', 'true', 'false', 'null']);
+                    node.traverse((child, path) => {
+                        if (!child.isSymbolNode) return;
+                        if (path === 'fn') return;                    // function name: sin(, enthalpy(
+                        if (arrayBases.has(child.name)) return;
+                        if (RESERVED.has(child.name)) return;
+                        if (ThermoEngine.propKeys[child.name.toLowerCase()] !== undefined) {
+                            throw new Error(`'${child.name}' is a property-function name; call it with parentheses or pick another variable name.`);
                         }
+                        this.registerVariable(child.name);
+                        if (varSet) varSet.add(child.name);
                     });
                 }
 
                 registerVariable(name) {
                     if (!this.variables.has(name)) {
-                        // Added unit metadata tracking
-                        this.variables.set(name, { guess: 1.0, lower: -Infinity, upper: Infinity, value: null, unit: '' });
+                        const old = this.previousVariables && this.previousVariables.get(name);
+                        this.variables.set(name, {
+                            guess: old ? old.guess : 1.0,
+                            lower: old ? old.lower : -Infinity,
+                            upper: old ? old.upper : Infinity,
+                            value: null,
+                            unit: old ? old.unit : ''
+                        });
                     }
                 }
             }
@@ -684,6 +681,7 @@ z = 0
                     for (const block of blocks) {
                         if (block.type === 'single') this.solveSingleEquation(block.eqIndex, state, block.targetVar);
                         else if (block.type === 'simultaneous') this.solveSimultaneousBlock(block.eqIndices, block.vars, state);
+                        else if (block.type === 'check') this.checkEquation(block.eqIndex, state);
                     }
 
                     // Solve Ordinary Differential Equations (ODEs) if defined
@@ -715,12 +713,12 @@ z = 0
                             const eq = this.parsedASTs[i];
                             const unknowns = eq.vars.filter(v => !knownVars.has(v));
 
-                            if (unknowns.length <= 1) {
-                                const target = unknowns.length === 1 ? unknowns[0] : eq.vars[0];
-                                blocks.push({ type: 'single', eqIndex: i, targetVar: target });
-                                handledEqs.add(i);
-                                if (target) knownVars.add(target);
-                                progress = true;
+                            if (unknowns.length === 1) {
+                                blocks.push({ type: 'single', eqIndex: i, targetVar: unknowns[0] });
+                                handledEqs.add(i); knownVars.add(unknowns[0]); progress = true;
+                            } else if (unknowns.length === 0) {
+                                blocks.push({ type: 'check', eqIndex: i });
+                                handledEqs.add(i); progress = true;
                             }
                         }
                     }
@@ -744,6 +742,16 @@ z = 0
                     return blocks;
                 }
 
+                checkEquation(eqIndex, state) {
+                    const { leftAST, rightAST, lineRaw } = this.parsedASTs[eqIndex];
+                    const scope = this.createScopeWithCoolProp(state);
+                    const L = leftAST.evaluate(scope), R = rightAST.evaluate(scope);
+                    if (typeof L === 'number' && typeof R === 'number' &&
+                        Math.abs(L - R) > 1e-6 * Math.max(Math.abs(L), Math.abs(R), 1)) {
+                        throw new Error(`Redundant/inconsistent equation '${lineRaw || (leftAST + ' = ' + rightAST)}': left = ${L}, right = ${R}.`);
+                    }
+                }
+
                 solveSingleEquation(eqIndex, state, targetVar) {
                     const { leftAST, rightAST, vars } = this.parsedASTs[eqIndex];
                     if (!targetVar) targetVar = vars.find(v => state[v] !== undefined) || vars[0];
@@ -752,105 +760,103 @@ z = 0
                     const scope = this.createScopeWithCoolProp(state);
 
                     // Direct AST evaluation check (handles direct assignments, arrays, and matrix operations)
-                    if (leftAST.toString() === targetVar) {
+                    const refsTarget = (ast) => ast.filter(n => n.toString() === targetVar).length > 0;
+                    if (leftAST.toString() === targetVar && !refsTarget(rightAST)) {
                         try {
                             const val = rightAST.evaluate(scope);
                             if (val !== undefined) { state[targetVar] = val; return; }
                         } catch (err) { }
                     }
-                    if (rightAST.toString() === targetVar) {
+                    if (rightAST.toString() === targetVar && !refsTarget(leftAST)) {
                         try {
                             const val = leftAST.evaluate(scope);
                             if (val !== undefined) { state[targetVar] = val; return; }
                         } catch (err) { }
                     }
 
-                    // Fallback to 1D Newton-Raphson solver with boundary constraints
-                    const meta = this.variablesMap.get(targetVar) || { lower: -Infinity, upper: Infinity };
-                    const evalResidual = (val) => {
-                        const localScope = this.createScopeWithCoolProp({ ...state, [targetVar]: val });
-                        return leftAST.evaluate(localScope) - rightAST.evaluate(localScope);
-                    };
-
-                    let x = state[targetVar];
-                    if (typeof x === 'object') x = 1.0;
-
-                    for (let iter = 0; iter < this.maxIterations; iter++) {
-                        const res = evalResidual(x);
-                        if (Math.abs(res) < this.tolerance) break;
-                        const h = Math.abs(x) * 1e-6 || 1e-6;
-                        const df = (evalResidual(x + h) - evalResidual(x - h)) / (2 * h);
-                        if (Math.abs(df) < 1e-12) break;
-
-                        let nextX = x - (res / df);
-                        // Apply lower/upper boundary constraints
-                        if (nextX < meta.lower) nextX = meta.lower + Math.abs(x - meta.lower) * 0.5;
-                        if (nextX > meta.upper) nextX = meta.upper - Math.abs(meta.upper - x) * 0.5;
-                        x = nextX;
-                    }
-                    state[targetVar] = x;
+                    this.solveSimultaneousBlock([eqIndex], [targetVar], state);
                 }
 
                 /**
                  * Multivariate Newton-Raphson Solver with Numerical Jacobian for coupled equations
                  */
                 solveSimultaneousBlock(eqIndices, vars, state) {
-                    const numEqs = eqIndices.length, numVars = vars.length;
-                    let X = vars.map(v => state[v]);
+                    const n = vars.length;
+                    if (eqIndices.length !== n) {
+                        throw new Error(`Coupled block is not square: ${eqIndices.length} equation(s), ${n} unknown(s) [${vars.join(', ')}]. Check for a missing or redundant equation.`);
+                    }
+                    const eqs = eqIndices.map(i => this.parsedASTs[i]);
+                    const metas = vars.map(v => this.variablesMap.get(v) || { lower: -Infinity, upper: Infinity });
 
-                    for (let iter = 0; iter < this.maxIterations; iter++) {
-                        const F = new Array(numEqs);
-                        let maxRes = 0;
-                        for (let i = 0; i < numEqs; i++) {
-                            const localState = { ...state };
-                            vars.forEach((v, idx) => localState[v] = X[idx]);
-                            const scope = this.createScopeWithCoolProp(localState);
-                            const { leftAST, rightAST } = this.parsedASTs[eqIndices[i]];
-                            F[i] = leftAST.evaluate(scope) - rightAST.evaluate(scope);
-                            maxRes = Math.max(maxRes, Math.abs(F[i]));
-                        }
-
-                        if (maxRes < this.tolerance) break;
-
-                        // Compute Numerical Jacobian Matrix J
-                        const J = Array.from({ length: numEqs }, () => new Array(numVars));
-                        for (let j = 0; j < numVars; j++) {
-                            const originalVal = X[j];
-                            const h = Math.abs(originalVal) * 1e-6 || 1e-6;
-
-                            X[j] = originalVal + h;
-                            const statePlus = { ...state }; vars.forEach((v, idx) => statePlus[v] = X[idx]);
-                            const scopePlus = this.createScopeWithCoolProp(statePlus);
-
-                            X[j] = originalVal - h;
-                            const stateMinus = { ...state }; vars.forEach((v, idx) => stateMinus[v] = X[idx]);
-                            const scopeMinus = this.createScopeWithCoolProp(stateMinus);
-
-                            X[j] = originalVal;
-
-                            for (let i = 0; i < numEqs; i++) {
-                                const { leftAST, rightAST } = this.parsedASTs[eqIndices[i]];
-                                const fPlus = leftAST.evaluate(scopePlus) - rightAST.evaluate(scopePlus);
-                                const fMinus = leftAST.evaluate(scopeMinus) - rightAST.evaluate(scopeMinus);
-                                J[i][j] = (fPlus - fMinus) / (2 * h);
+                    // Residual f = left - right for every equation at trial point X
+                    const residuals = (X) => {
+                        const local = { ...state };
+                        vars.forEach((v, k) => local[v] = X[k]);
+                        const scope = this.createScopeWithCoolProp(local);
+                        return eqs.map(({ leftAST, rightAST }) => {
+                            const L = leftAST.evaluate(scope), R = rightAST.evaluate(scope);
+                            return { f: L - R, mag: Math.max(Math.abs(L), Math.abs(R)) };
+                        });
+                    };
+                    const clamp = (X) => X.map((x, k) => Math.min(Math.max(x, metas[k].lower), metas[k].upper));
+                    // Merit: relative for large quantities, absolute for quantities below 1
+                    const merit = (r) => Math.max(...r.map(e => Math.abs(e.f) / Math.max(e.mag, 1)));
+                    const isConverged = (r) => r.every(e => Number.isFinite(e.f) && Math.abs(e.f) <= this.tolerance * e.mag + 1e-14);
+                    const jacobian = (X) => {
+                        const J = eqs.map(() => new Array(n).fill(0));
+                        for (let j = 0; j < n; j++) {
+                            const h = Math.max(Math.abs(X[j]), 1e-3) * 1e-6;
+                            const Xp = X.slice(), Xm = X.slice(); Xp[j] += h; Xm[j] -= h;
+                            const rp = residuals(Xp), rm = residuals(Xm);
+                            for (let i = 0; i < n; i++) {
+                                if (eqs[i].vars.includes(vars[j])) J[i][j] = (rp[i].f - rm[i].f) / (2 * h);
                             }
                         }
-
-                        // Solve linear equation system J * dX = -F
-                        let dX;
-                        try { dX = math.lusolve(J, F.map(val => -val)).flat(); }
-                        catch (err) { break; }
-
-                        // Apply step updates with boundary limits
-                        for (let j = 0; j < numVars; j++) {
-                            const meta = this.variablesMap.get(vars[j]) || { lower: -Infinity, upper: Infinity };
-                            let nextVal = X[j] + dX[j];
-                            if (nextVal < meta.lower) nextVal = meta.lower + 0.01;
-                            if (nextVal > meta.upper) nextVal = meta.upper - 0.01;
-                            X[j] = nextVal;
+                        return J;
+                    };
+                    // Try a step direction with step halving; returns true if the merit function decreased
+                    const tryStep = (dX) => {
+                        if (dX.some(d => !Number.isFinite(d))) return false;
+                        for (let t = 1, k = 0; k < 30; k++, t /= 2) {
+                            const Xn = clamp(X.map((x, m) => x + t * dX[m]));
+                            let rn;
+                            try { rn = residuals(Xn); } catch (e) { continue; }
+                            const en = merit(rn);
+                            if (Number.isFinite(en) && en < err) { X = Xn; r = rn; err = en; return true; }
                         }
+                        return false;
+                    };
+
+                    let X = clamp(vars.map(v => state[v]));
+                    let r = residuals(X), err = merit(r);
+
+                    for (let iter = 0; iter < this.maxIterations && !isConverged(r); iter++) {
+                        const J = jacobian(X), negF = r.map(e => -e.f);
+                        let ok = false;
+                        try { ok = tryStep(math.lusolve(J, negF).flat()); } catch (e) { ok = false; }
+                        if (!ok) {
+                            // Levenberg-Marquardt fallback: (J'J + lambda*I) dX = -J'f  (handles singular / poor-guess cases)
+                            const Jt = math.transpose(J), JtJ = math.multiply(Jt, J), g = math.multiply(Jt, negF);
+                            const base = Math.max(math.trace(JtJ) / n, 1e-12);
+                            for (let k = 0; k < 10 && !ok; k++) {
+                                const lam = base * 1e-6 * Math.pow(10, k);
+                                try { ok = tryStep(math.lusolve(math.add(JtJ, math.multiply(lam, math.identity(n))), g).flat()); } catch (e) { ok = false; }
+                            }
+                        }
+                        if (!ok) break;
                     }
-                    vars.forEach((v, idx) => state[v] = X[idx]);
+
+                    vars.forEach((v, k) => state[v] = X[k]);
+                    if (!isConverged(r)) {
+                        throw new Error(`Newton iteration did not converge for [${vars.join(', ')}] (worst scaled residual ${err.toExponential(2)}). Try better guesses or tighter bounds.`);
+                    }
+                    // Warn when the solution is not unique (singular Jacobian)
+                    try {
+                        const J = jacobian(X);
+                        const rowNorms = J.map(row => Math.sqrt(row.reduce((s, a) => s + a * a, 0)) || 1);
+                        const detRel = Math.abs(math.det(J)) / rowNorms.reduce((a, b) => a * b, 1);
+                        if (!(detRel > 1e-10)) console.log(`WARNING: Jacobian of block [${vars.join(', ')}] is (nearly) singular; the solution may not be unique.`);
+                    } catch (e) { }
                 }
 
                 /**
@@ -929,7 +935,7 @@ z = 0
                         unitScope[propName] = (...args) => {
                             const outKey = ThermoEngine.propKeys[propName.toLowerCase()] || propName.toUpperCase();
                             const thermoUnits = {
-                                'H': 'J/kg', 'S': 'J/(kg K)', 'T': 'K', 'P': 'Pa', 'D': 'kg/m^3', 'V': 'm^3/kg', 'U': 'J/kg', 'Q': ''
+                                'H': 'J/kg', 'S': 'J/(kg K)', 'T': 'K', 'P': 'Pa', 'D': 'kg/m^3', 'V_SPEC': 'm^3/kg', 'U': 'J/kg', 'Q': ''
                             };
                             return thermoUnits[outKey] ? math.unit(1, thermoUnits[outKey]) : 1;
                         };
@@ -1006,13 +1012,6 @@ z = 0
                             this.parser.parsedASTs.push({ leftAST, rightAST, vars: [paramVar] });
                         } catch (err) { }
 
-                        if (this.parser.variables.has(paramVar)) {
-                            const meta = this.parser.variables.get(paramVar);
-                            meta.guess = val;
-                            meta.lower = val;
-                            meta.upper = val;
-                        }
-
                         const solver = new this.solverClass(this.parser.parsedASTs, this.parser.variables, this.parser.odeCalls);
                         const solution = solver.solve();
                         results.push({ [paramVar]: val, ...solution });
@@ -1037,13 +1036,6 @@ z = 0
                         this.parser.parsedASTs.push({ leftAST, rightAST, vars: [freeVar] });
                     } catch (err) {
                         console.error("Failed to inject free variable binding: " + err.message);
-                    }
-
-                    if (this.parser.variables.has(freeVar)) {
-                        const meta = this.parser.variables.get(freeVar);
-                        meta.guess = trialValue;
-                        meta.lower = trialValue;
-                        meta.upper = trialValue;
                     }
 
                     const solver = new this.solverClass(this.parser.parsedASTs, this.parser.variables, this.parser.odeCalls);
@@ -1243,21 +1235,24 @@ z = 0
                     // Expanded Unit width to 100px and increased solved value font size to 14px bold
                     tr.innerHTML = `<td style="padding:2px; font-weight:bold;">${name}</td>
                         <td style="padding:2px;"><input type="number" step="any" value="${meta.guess}" data-var="${name}" data-field="guess" style="width:100px; text-align:center;"></td>
-                        <td style="padding:2px;"><input type="number" step="any" value="${meta.lower === -Infinity ? '' : meta.lower}" placeholder="-inf" data-var="${name}" style="width:100px; text-align:center;"></td>
-                        <td style="padding:2px;"><input type="number" step="any" value="${meta.upper === Infinity ? '' : meta.upper}" placeholder="inf" data-var="${name}" style="width:100px; text-align:center;"></td>
+                        <td style="padding:2px;"><input type="number" step="any" value="${meta.lower === -Infinity ? '' : meta.lower}" placeholder="-inf" data-field="lower" data-var="${name}" style="width:100px; text-align:center;"></td>
+                        <td style="padding:2px;"><input type="number" step="any" value="${meta.upper === Infinity ? '' : meta.upper}" placeholder="inf" data-field="upper" data-var="${name}" style="width:100px; text-align:center;"></td>
                         <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="[-]" data-var="${name}" data-field="unit" style="width:100px; text-align:center;"></td>
                         <td style="padding:2px 4px; font-family:monospace; font-size:14px; font-weight:bold; color:#0056b3;">${solvedDisplay}</td>`;
                     tbody.appendChild(tr);
                 });
                 variablesContainer.appendChild(table);
 
-                // Re-bind listeners for manual unit overrides
-                table.querySelectorAll('input[data-field="unit"]').forEach(input => {
+                table.querySelectorAll('input[data-var]').forEach(input => {
                     input.addEventListener('change', (e) => {
-                        const varName = e.target.getAttribute('data-var');
-                        if (parser.variables.has(varName)) {
-                            parser.variables.get(varName).unit = e.target.value.trim();
-                        }
+                        const meta = parser.variables.get(e.target.getAttribute('data-var'));
+                        if (!meta) return;
+                        const field = e.target.getAttribute('data-field');
+                        const raw = e.target.value.trim();
+                        if (field === 'unit') meta.unit = raw;
+                        else if (field === 'guess') { const v = parseFloat(raw); if (Number.isFinite(v)) meta.guess = v; }
+                        else if (field === 'lower') meta.lower = raw === '' ? -Infinity : parseFloat(raw);
+                        else if (field === 'upper') meta.upper = raw === '' ? Infinity : parseFloat(raw);
                     });
                 });
             }
@@ -1355,6 +1350,7 @@ z = 0
 
                     console.log(`System Determinate: ${numActiveEqs} equation(s) and ${numActiveVars} variable(s). Solving...`);
 
+                    UnitConsistencyChecker.run(parser.parsedASTs, parser.variables);
                     const solver = new BoundedSolver(parser.parsedASTs, parser.variables, parser.odeCalls);
                     const solution = solver.solve();
 
@@ -1375,7 +1371,7 @@ z = 0
                         }));
 
                         updatePlotControls(plotData, ode.timeVar, ode.stateVar);
-                        renderPlot(plotData, ode.timeVar, ode.stateVar, plotTypeSelect.value, plotOverlayCheck.checked);
+                        renderPlot(plotData, plotXSelect.value, plotYSelect.value, plotTypeSelect.value, plotOverlayCheck.checked);
                         console.log(`Plotted ODE output: ${ode.stateVar} vs ${ode.timeVar}`);
                     }
                 } catch (err) {
@@ -1438,8 +1434,8 @@ z = 0
                         const yVar = keys.find(k => k !== pVar);
                         if (yVar) {
                             updatePlotControls(results, pVar, yVar);
-                            renderPlot(results, pVar, yVar, plotTypeSelect.value, plotOverlayCheck.checked);
-                            console.log(`Sweep Complete. Plotted ${yVar} vs ${pVar}.`);
+                            renderPlot(results, plotXSelect.value, plotYSelect.value, plotTypeSelect.value, plotOverlayCheck.checked);
+                            console.log(`Sweep Complete. Plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
                         }
                     }
                 } catch (err) {
@@ -1642,8 +1638,11 @@ z = 0
                 const optDirection = document.getElementById('opt-direction').value; // 'max' or 'min'
                 const objVar = document.getElementById('opt-target').value;    // Target / Objective
                 const optVar = document.getElementById('opt-free').value;      // Free / Independent
-                const lower = parseFloat(document.getElementById('opt-lower').value) || 0;
-                const upper = parseFloat(document.getElementById('opt-upper').value) || 100;
+                const lower = parseFloat(document.getElementById('opt-lower').value);
+                const upper = parseFloat(document.getElementById('opt-upper').value);
+                if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower >= upper) {
+                    alert('Enter numeric bounds with lower < upper.'); return;
+                }
                 const algo = document.getElementById('opt-algo').value;      // 'brent' or 'golden'
 
                 try {
@@ -1725,12 +1724,16 @@ z = 0
                 // Get numerical keys only
                 const keys = Object.keys(dataset[0]).filter(k => typeof dataset[0][k] === 'number' || Array.isArray(dataset[0][k]));
 
+                // Keep the user's current Y choice if it still exists in the new dataset
+                const prevY = plotYSelect.value;
+                const ySel = keys.includes(prevY) ? prevY : defaultY;
+
                 plotXSelect.innerHTML = '';
                 plotYSelect.innerHTML = '';
 
                 keys.forEach(k => {
                     plotXSelect.innerHTML += `<option value="${k}" ${k === defaultX ? 'selected' : ''}>${k}</option>`;
-                    plotYSelect.innerHTML += `<option value="${k}" ${k === defaultY ? 'selected' : ''}>${k}</option>`;
+                    plotYSelect.innerHTML += `<option value="${k}" ${k === ySel ? 'selected' : ''}>${k}</option>`;
                 });
             }
 
@@ -1755,6 +1758,37 @@ z = 0
                 console.log("Plot canvas cleared.");
             });
 
+            // --- Keep the parametric-variable list in sync with the equations ---
+            const paramVarSelect = document.getElementById('param-var');
+            function refreshParamVarList() {
+                let names;
+                try {
+                    parser.parse(editor.value);
+                    names = Array.from(parser.variables.keys());
+                } catch (err) {
+                    return;   // equations are mid-edit and don't parse yet: keep the current list
+                }
+                const prev = paramVarSelect.value;
+                paramVarSelect.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
+                if (names.includes(prev)) paramVarSelect.value = prev;
+            }
+            let paramListTimer = null;
+            editor.addEventListener('input', () => {
+                clearTimeout(paramListTimer);
+                paramListTimer = setTimeout(refreshParamVarList, 400);
+            });
+            refreshParamVarList();
+
+            // --- Replot automatically when any plot control changes ---
+            function autoReplot(freshPlot) {
+                if (!window.lastPlotDataset) return;
+                renderPlot(window.lastPlotDataset, plotXSelect.value, plotYSelect.value,
+                    plotTypeSelect.value, freshPlot ? false : plotOverlayCheck.checked);
+            }
+            plotXSelect.addEventListener('change', () => autoReplot(false));
+            plotYSelect.addEventListener('change', () => autoReplot(false));
+            plotTypeSelect.addEventListener('change', () => autoReplot(true));
+            
             console.log("EES Web Edition Engine Initialized (Complete Build with Documentation).");
         });
     </script>
