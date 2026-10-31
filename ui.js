@@ -275,6 +275,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderPlot(plotData, plotXSelect.value, plotYSelect.value, plotTypeSelect.value, plotOverlayCheck.checked);
                 console.log(`Plotted ODE output: ${ode.stateVar} vs ${ode.timeVar}`);
             }
+
+            // ode blocks: their tables go to the Parametric Table pane; the first state of the first block is plotted
+            if (OdeBlocks.tables.length > 0) {
+                const cell = 'padding:4px; border:1px solid #ccc; text-align:center;';
+                let html = '';
+                OdeBlocks.tables.forEach(tb => {
+                    html += `<div style="font-size:12px; margin:6px 0 2px;"><b>ode block, line ${tb.no}</b>: ${tb.rows.length} rows, ${tb.steps} internal steps</div>`;
+                    html += '<table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr style="background:#eee;">' +
+                        tb.cols.map(k => `<th style="${cell}">${k}${unitTag(k)}</th>`).join('') + '</tr></thead><tbody>' +
+                        tb.rows.map(r => '<tr>' + r.map((v, i) => `<td style="${cell}">${fmtNum(toDisp(tb.cols[i], v))}</td>`).join('') + '</tr>').join('') +
+                        '</tbody></table>';
+                });
+                parametricContainer.innerHTML = html;
+                const tb = OdeBlocks.tables[0];
+                const plotData = tb.rows.map(r => Object.fromEntries(tb.cols.map((k, i) => [k, toDisp(k, r[i])])));
+                updatePlotControls(plotData, tb.indep, tb.states[0]);
+                renderPlot(plotData, plotXSelect.value, plotYSelect.value, plotTypeSelect.value, plotOverlayCheck.checked);
+                console.log(`ode block, line ${tb.no}: ${tb.rows.length} output rows (${tb.steps} internal steps); plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
+            }
         } catch (err) {
             console.error("Solver Error: " + err.message);
         }

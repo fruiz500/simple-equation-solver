@@ -23,6 +23,7 @@ class EESParser {
         let cleanText = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*|\{[^}]*\}/g, (c) => c.replace(/[^\n]/g, ' '));
         if (cleanText.includes('/*')) throw new Error("A '/*' comment is never closed with '*/'.");
         const srcLines = cleanText.split('\n');
+        const odeBlocks = OdeBlocks.extract(srcLines);          // lifts out the ode ... end blocks
         const userFuncs = UserFunctions.extract(srcLines);      // lifts out the function ... end blocks
         // String variables:  fluid$ = 'R134a'  (substituted as text wherever fluid$ appears)
         const strVars = {};
@@ -32,6 +33,7 @@ class EESParser {
             return l;
         }).join('\n');
         UserFunctions.activate(userFuncs, strVars);
+        OdeBlocks.activate(odeBlocks, strVars);
         cleanText = cleanText.replace(/([A-Za-z_]\w*)\$/g, (all, name) => {
             if (!(name in strVars)) throw new Error(`String variable '${name}$' is not defined. Define it first, e.g. ${name}$ = 'water'`);
             return "'" + strVars[name] + "'";
@@ -108,7 +110,24 @@ class EESParser {
                 throw new Error(`Line ${lineNo} ('${line}'): ${err.message}`);
             }
         }
+        OdeBlocks.active.forEach(blk => this.addOdeBlock(blk));
         return { equationsCount: this.rawEquations.length, variables: Array.from(this.variables.keys()) };
+    }
+
+    // An ode block gives one equation per state:  T = ode#k:T(inputs...), the value of T at the end
+    addOdeBlock(blk) {
+        try {
+            const inputs = blk.inputs.map(nm => math.parse(nm));
+            blk.states.forEach(s => {
+                const leftAST = math.parse(s);
+                const rightAST = new math.FunctionNode(new math.SymbolNode(blk.fname(s)), inputs);
+                const eqVars = new Set();
+                this.extractVariablesFromAST(leftAST, eqVars);
+                this.extractVariablesFromAST(rightAST, eqVars);
+                this.rawEquations.push({ leftStr: s, rightStr: rightAST.toString(), lineRaw: blk.header });
+                this.parsedASTs.push({ leftAST, rightAST, vars: Array.from(eqVars), lineRaw: blk.header, lineNo: blk.no });
+            });
+        } catch (err) { throw new Error(`Line ${blk.no} ('${blk.header}'): ${err.message}`); }
     }
 
     // Positions of the '=' signs that are not part of ==, <=, >=, != (text inside quotes is skipped)

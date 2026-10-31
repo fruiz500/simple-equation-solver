@@ -34,7 +34,7 @@ class BoundedSolver {
         });
 
         scope.ln = Math.log;
-        Object.assign(scope, UserFunctions.entries);
+        Object.assign(scope, UserFunctions.entries, OdeBlocks.entries);
 
         return scope;
     }
@@ -51,6 +51,7 @@ class BoundedSolver {
             else if (block.type === 'simultaneous') this.solveSimultaneousBlock(block.eqIndices, block.vars, state);
             else if (block.type === 'check') this.checkEquation(block.eqIndex, state);
         }
+        if (OdeBlocks.active.length > 0) OdeBlocks.record(state); else OdeBlocks.tables = [];
 
         // Solve Ordinary Differential Equations (ODEs) if defined
         for (const odeCall of this.odeCalls) {
@@ -294,7 +295,7 @@ class BoundedSolver {
     }
 
     /**
-     * Classical 4th Order Runge-Kutta (RK4) Numerical ODE Integrator
+     * One-line  [t, y] = ode45(@(t,y) f, [t0, tf], y0):  adaptive Dormand-Prince, output at 100 equal intervals
      */
     solveODE45(odeCall, state) {
         const match = odeCall.argsRaw.match(/^@\(([^,]+),([^)]+)\)\s*(.+),\s*\[([^\]]+)\]\s*,\s*(.+)$/);
@@ -317,25 +318,10 @@ class BoundedSolver {
             let t0 = parseFloat(tSpan[0]), tf = parseFloat(tSpan[1]);
             let y0 = parseFloat(math.evaluate(y0Str));
 
-            const steps = 100;
-            const h = (tf - t0) / steps;
-
-            let tArr = [t0], yArr = [y0];
-            let currT = t0, currY = y0;
-
-            // RK4 Numerical Integration Steps
-            for (let i = 0; i < steps; i++) {
-                let k1 = h * derivFunc(currT, currY);
-                let k2 = h * derivFunc(currT + h / 2, currY + k1 / 2);
-                let k3 = h * derivFunc(currT + h / 2, currY + k2 / 2);
-                let k4 = h * derivFunc(currT + h, currY + k3);
-
-                currY = currY + (k1 + 2 * k2 + 2 * k3 + k4) / 6;
-                currT = currT + h;
-
-                tArr.push(currT);
-                yArr.push(currY);
-            }
+            const outs = [];
+            for (let i = 1; i <= 100; i++) outs.push(i === 100 ? tf : t0 + i * (tf - t0) / 100);
+            const { ys } = OdeIntegrator.dopri((t, y) => [Number(derivFunc(t, y[0]))], t0, [y0], outs, { rtol: 1e-9, atol: 1e-12, maxSteps: 200000 });
+            const tArr = [t0, ...outs], yArr = [y0, ...ys.map(v => v[0])];
 
             state[odeCall.timeVar] = tArr;
             state[odeCall.stateVar] = yArr;
