@@ -320,7 +320,10 @@ z = 0
 
         <!-- Panel 2: Solved Variables Table & Boundary Controls -->
         <div class="panel" id="variables-panel">
-            <h2>Variables</h2>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2>Variables</h2><button id="btn-export" class="secondary" style="padding:2px 8px; font-size:12px;"
+                    title="Export the results to a text file">Export...</button>
+            </div>
             <div id="variables-container"></div>
         </div>
 
@@ -2559,10 +2562,33 @@ z = 0
                 container.querySelectorAll('.gutter').forEach(g => attach(g, g.classList.contains('gutter-v')));
             })();
 
-            // --- Save / open session files (.ses): equations + variable settings + results ---
-            // The file is plain text. The equations come first; the rest is one trailing block comment, /*@SESSION ... @*/,
-            // which the equation parser ignores like any comment.
+            // --- Files: save/open sessions (.ses) and export results ---
+            // A session file is plain text: the equations, then one trailing block comment /*@SESSION ... @*/ holding the variable
+            // settings and results (the equation parser ignores it like any comment).
             (function () {
+                // Saves text through the native Save dialog when the browser has one (Chrome, Edge); otherwise asks for a name and downloads.
+                // Returns the file name, or null if the user cancelled.
+                async function saveTextFile(text, suggestedName, exts, description) {
+                    if (window.showSaveFilePicker) {
+                        try {
+                            const handle = await window.showSaveFilePicker({ suggestedName, types: [{ description, accept: { 'text/plain': exts } }] });
+                            const w = await handle.createWritable();
+                            await w.write(text); await w.close();
+                            return handle.name;
+                        } catch (e) { if (e && e.name === 'AbortError') return null; }   // anything else: use the download fallback
+                    }
+                    let name = window.prompt('File name:', suggestedName);
+                    if (!name || !name.trim()) return null;
+                    name = name.trim();
+                    if (!/\.[A-Za-z0-9]+$/.test(name)) name += exts[0];
+                    const a = document.createElement('a');
+                    a.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));   // keeps browsers from adding .txt
+                    a.download = name;
+                    document.body.appendChild(a); a.click(); a.remove();
+                    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+                    return name;
+                }
+
                 const fileInput = document.getElementById('file-load');
                 const SES = /\n?\/\*@SESSION\s*([\s\S]*?)\s*@\*\/\s*$/;
                 let lastName = 'equations.ses';
@@ -2635,28 +2661,31 @@ z = 0
 
                 document.getElementById('btn-save').addEventListener('click', async () => {
                     const { text, withResults } = buildFile();
-                    const note = withResults ? 'equations and results' : 'equations (the results are out of date, so they were not saved; Solve first to include them)';
-                    if (window.showSaveFilePicker) {            // Chrome / Edge: native Save dialog with a file name
-                        try {
-                            const handle = await window.showSaveFilePicker({ suggestedName: lastName, types: [{ description: 'Session file', accept: { 'text/plain': ['.ses', '.txt', '.eqn'] } }] });
-                            const w = await handle.createWritable();
-                            await w.write(text); await w.close();
-                            lastName = handle.name;
-                            console.log(`Saved '${handle.name}': ${note}.`);
-                            return;
-                        } catch (e) { if (e && e.name === 'AbortError') return; }   // anything else: use the download fallback
-                    }
-                    let name = window.prompt('File name for the session:', lastName);
-                    if (!name || !name.trim()) return;
-                    name = name.trim();
-                    if (!/\.[A-Za-z0-9]+$/.test(name)) name += '.ses';
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));   // keeps browsers from adding .txt
-                    a.download = name;
-                    document.body.appendChild(a); a.click(); a.remove();
-                    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+                    const name = await saveTextFile(text, lastName, ['.ses', '.txt', '.eqn'], 'Session file');
+                    if (!name) return;
                     lastName = name;
-                    console.log(`Saved '${name}' to your Downloads folder: ${note}.`);
+                    console.log(`Saved '${name}': ` + (withResults ? 'equations and results.' : 'equations only (the results are out of date, so they were not saved; Solve first to include them).'));
+                });
+
+                // --- Export results: Variable <TAB> Value <TAB> Unit, in the units shown in the Variables pane ---
+                let lastResultsName = 'results.txt';
+                document.getElementById('btn-export').addEventListener('click', async () => {
+                    const rows = [];
+                    parser.variables.forEach((meta, name) => {
+                        const v = meta.value;
+                        if (v === null || v === undefined) return;
+                        const declared = UnitConv.isValid(meta.unit) ? (meta.unit || '') : '';
+                        const unit = declared || meta.inferredUnit || '';
+                        let val;
+                        if (typeof v === 'number') val = fmtNum(declared ? UnitConv.fromSI(v, declared) : v);
+                        else val = math.format(v, { precision: 7 });       // arrays and matrices, in SI
+                        rows.push(`${name}\t${val}\t${unit}`);
+                    });
+                    if (rows.length === 0) { console.warn('Nothing to export yet: press Solve first.'); return; }
+                    const name = await saveTextFile('Variable\tValue\tUnit\n' + rows.join('\n') + '\n', lastResultsName, ['.txt', '.tsv'], 'Results (tab-separated text)');
+                    if (!name) return;
+                    lastResultsName = name;
+                    console.log(`Exported ${rows.length} result(s) to '${name}'.`);
                 });
             })();
 
