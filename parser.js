@@ -23,6 +23,8 @@ class EESParser {
         let cleanText = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*|\{[^}]*\}/g, (c) => c.replace(/[^\n]/g, ' '));
         if (cleanText.includes('/*')) throw new Error("A '/*' comment is never closed with '*/'.");
         const srcLines = cleanText.split('\n');
+        this.constants = EESParser.constantsOf(srcLines);       // name = number lines, for duplicate ranges and indices
+        EESParser.expandDuplicates(srcLines, this.constants);   // writes out the duplicate ... end blocks
         const odeBlocks = OdeBlocks.extract(srcLines);          // lifts out the ode ... end blocks
         const userFuncs = UserFunctions.extract(srcLines);      // lifts out the function ... end blocks
         // String variables:  fluid$ = 'R134a'  (substituted as text wherever fluid$ appears)
@@ -33,12 +35,12 @@ class EESParser {
             return l;
         }).join('\n');
         UserFunctions.activate(userFuncs, strVars);
-        OdeBlocks.activate(odeBlocks, strVars);
+        OdeBlocks.activate(odeBlocks, strVars, (node) => this.flatIndex(node));
         cleanText = cleanText.replace(/([A-Za-z_]\w*)\$/g, (all, name) => {
             if (!(name in strVars)) throw new Error(`String variable '${name}$' is not defined. Define it first, e.g. ${name}$ = 'water'`);
             return "'" + strVars[name] + "'";
         });
-        const lines = cleanText.split('\n').map((l, i) => [l.trim(), i + 1]).filter(([l]) => l.length > 0);
+        const lines = cleanText.split('\n').flatMap((l, i) => l.split('\u0001').map(p => [p.trim(), i + 1])).filter(([l]) => l.length > 0);
 
         for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
             let [line, lineNo] = lines[lineIndex];
@@ -69,8 +71,8 @@ class EESParser {
             const parts = [line.slice(0, eqAt[0]), line.slice(eqAt[0] + 1)];
 
             try {
-                const leftAST = UserFunctions.lowerIf(math.parse(parts[0].trim()));
-                let rightAST = UserFunctions.lowerIf(math.parse(parts[1].trim()));
+                const leftAST = this.flatIndex(UserFunctions.lowerIf(math.parse(parts[0].trim())));
+                let rightAST = this.flatIndex(UserFunctions.lowerIf(math.parse(parts[1].trim())));
                 const eqVars = new Set();
                 this.extractVariablesFromAST(leftAST, eqVars);
                 this.extractVariablesFromAST(rightAST, eqVars);
@@ -117,9 +119,9 @@ class EESParser {
     // An ode block gives one equation per state:  T = ode#k:T(inputs...), the value of T at the end
     addOdeBlock(blk) {
         try {
-            const inputs = blk.inputs.map(nm => math.parse(nm));
+            const inputs = blk.inputs.map(nm => this.flatIndex(math.parse(nm)));
             blk.states.forEach(s => {
-                const leftAST = math.parse(s);
+                const leftAST = this.flatIndex(math.parse(s));
                 const rightAST = new math.FunctionNode(new math.SymbolNode(blk.fname(s)), inputs);
                 const eqVars = new Set();
                 this.extractVariablesFromAST(leftAST, eqVars);
@@ -128,6 +130,143 @@ class EESParser {
                 this.parsedASTs.push({ leftAST, rightAST, vars: Array.from(eqVars), lineRaw: blk.header, lineNo: blk.no });
             });
         } catch (err) { throw new Error(`Line ${blk.no} ('${blk.header}'): ${err.message}`); }
+    }
+
+    // Lines  name = constant  (a number, or an expression of earlier constants, with an optional unit tag) outside
+    // function, ode and duplicate blocks. Their values (SI) are known before solving: duplicate ranges and indices use them.
+    static constantsOf(lines) {
+        const C = {}, cand = [];
+        let skip = 0, depth = 0;                                  // inside a block: skip its lines
+        lines.forEach((raw) => {
+            const t = raw.trim();
+            if (skip) {
+                if (/^(if|for|while|duplicate)\b/.test(t)) depth++;
+                else if (/^end\s*;?$/.test(t)) { if (depth > 0) depth--; else skip = 0; }
+                return;
+            }
+            if (/^(function|ode\s+[A-Za-z_]\w*\s*=|duplicate)\b/.test(t)) { skip = 1; depth = 0; return; }
+            const m = t.match(/^([A-Za-z_]\w*)\s*=\s*([^=]+?)(?:\s+\[([^\]]*)\])?\s*$/);
+            if (m && !/[<>!]$/.test(m[2])) cand.push(m);
+        });
+        for (let pass = 0; pass < 10; pass++) {                   // repeat so that  M = N - 1  after  N = 20  works
+            let added = false;
+            for (const [, name, expr, unit] of cand) {
+                if (name in C) continue;
+                try {
+                    const node = math.parse(expr);
+                    if (node.filter((c, path) => c.isSymbolNode && path !== 'fn' && !(c.name in C) && !['pi', 'e'].includes(c.name)).length) continue;
+                    if (node.filter(c => c.isAccessorNode || c.isAssignmentNode).length) continue;
+                    let v = node.evaluate({ ...C });
+                    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+                    if (unit && unit.trim() && unit.trim() !== '-') v = UnitConv.toSI(v, unit.trim());
+                    C[name] = v; added = true;
+                } catch (e) { }
+            }
+            if (!added) break;
+        }
+        return C;
+    }
+
+    // duplicate i = a : b  ...  end   writes its lines once for every value of i (nested blocks allowed). The copies
+    // of a line go into that line's slot, separated by \u0001, so messages keep the source line number.
+    static expandDuplicates(lines, C) {
+        const isEnd = (t) => /^end\s*;?$/.test(t);
+        const findEnd = (i) => {
+            let depth = 1;
+            for (let j = i + 1; j < lines.length; j++) {
+                const t = lines[j].trim();
+                if (/^duplicate\b/.test(t)) depth++;
+                else if (isEnd(t) && --depth === 0) return j;
+                else if (/^(if|for|while|function|ode)\b/.test(t)) {
+                    throw new Error(`Line ${j + 1}: a duplicate block holds equations only (no if, for, while, function or ode inside it; an ode block may contain a duplicate block).`);
+                }
+            }
+            throw new Error(`Line ${i + 1}: this duplicate block has no matching 'end'.`);
+        };
+        // replaces the loop variables (whole words, outside quotes) by their values
+        const subst = (text, env) => text.split(/('[^']*'|"[^"]*")/).map((seg, k) => k % 2 ? seg :
+            seg.replace(/[A-Za-z_]\w*/g, (w, off) => (w in env && seg[off - 1] !== '.' && seg[off + w.length] !== '$') ? (env[w] < 0 ? `(${env[w]})` : String(env[w])) : w)).join('');
+        const out = new Map();                                   // line index -> written-out copies
+        let total = 0;
+        const expand = (i, j, env) => {
+            const m = lines[i].trim().match(/^duplicate\s+([A-Za-z_]\w*)\s*=\s*(.+)$/);
+            if (!m) throw new Error(`Line ${i + 1}: write  duplicate i = start : end  (or start : step : end).`);
+            let vals;
+            try {
+                const node = math.parse(subst(m[2], env));
+                const unknown = node.filter((c, path) => c.isSymbolNode && path !== 'fn' && !(c.name in C) && !['pi', 'e'].includes(c.name));
+                if (unknown.length) throw new Error(`Undefined symbol ${unknown[0].name}`);   // never read as a unit (N is newton)
+                const r = node.evaluate({ ...C });
+                vals = (math.isMatrix(r) ? r.toArray() : Array.isArray(r) ? r : [r]).flat(Infinity);
+            } catch (e) {
+                const u = /Undefined symbol (\S+)/.exec(e.message);
+                throw new Error(`Line ${i + 1}: the range of duplicate must be known before solving` + (u ? `; '${u[1]}' is not a constant (set it on a line of its own, such as ${u[1]} = 10)` : ` (${e.message})`) + '.');
+            }
+            if (!vals.every(v => typeof v === 'number' && Number.isFinite(v))) throw new Error(`Line ${i + 1}: the range of duplicate must be numbers.`);
+            for (const v of vals) {
+                const env2 = { ...env, [m[1]]: v };
+                for (let k = i + 1; k < j; k++) {
+                    const t = lines[k].trim();
+                    if (/^duplicate\b/.test(t)) { const e2 = findEnd(k); expand(k, e2, env2); k = e2; continue; }
+                    if (!t) continue;
+                    if (++total > 100000) throw new Error(`Line ${i + 1}: duplicate would write more than 100000 lines.`);
+                    if (!out.has(k)) out.set(k, []);
+                    out.get(k).push(subst(t, env2));
+                }
+            }
+        };
+        let inFunction = 0;                                       // depth inside a function block: duplicate is not allowed there
+        for (let i = 0; i < lines.length; i++) {
+            const t = lines[i].trim();
+            if (inFunction) {
+                if (/^(if|for|while)\b/.test(t)) inFunction++;
+                else if (isEnd(t)) inFunction--;
+                else if (/^duplicate\b/.test(t)) throw new Error(`Line ${i + 1}: duplicate writes equations; inside a function use a for loop.`);
+                continue;
+            }
+            if (/^function\b/.test(t)) { inFunction = 1; continue; }
+            if (!/^duplicate\b/.test(t)) continue;
+            const j = findEnd(i);
+            expand(i, j, {});
+            for (let k = i; k <= j; k++) lines[k] = '';
+            i = j;
+        }
+        out.forEach((copies, k) => {
+            // The usual mistake: the same left side in every copy, as in  s = s + x[i]
+            const lefts = copies.map(c => { const at = EESParser.equalsAt(c); return at.length ? c.slice(0, at[0]).replace(/\s+/g, '') : null; });
+            if (copies.length > 1 && lefts[0] && /^[A-Za-z_]/.test(lefts[0]) && !/'$/.test(lefts[0]) && lefts.every(l => l === lefts[0])) {
+                throw new Error(`Line ${k + 1}: every copy of this line defines the same ${lefts[0]}, so the copies contradict each other (equations are solved together, not run in order). ` +
+                    `To add up terms, write for example  ${lefts[0]} = sum(x[1:N]);  for a running calculation, use a user function with a for loop.`);
+            }
+            lines[k] = copies.map(c => '\u0001' + c).join('');
+        });
+    }
+
+    // Indices that can be computed before solving become part of the variable name: T[i+1] with i = 2 is T[3], and
+    // T[N] with the constant N = 20 is T[20]; T[2,3] is T[2, 3]. A range x[1:N] becomes the list [x[1], ..., x[N]],
+    // so sum(x[1:N]) works. Other indices are left alone.
+    flatIndex(node) {
+        const C = this.constants || {};
+        const val = (n) => {
+            if (n.filter((c, path) => c.isSymbolNode && path !== 'fn' && !(c.name in C)).length) return null;
+            try { return n.evaluate({ ...C }); } catch (e) { return null; }
+        };
+        const check = (k, name) => {
+            if (!(typeof k === 'number' && Number.isInteger(k) && k >= 1)) throw new Error(`an index of ${name} must be a whole number of 1 or more, got ${typeof k === 'number' ? k : k}`);
+            return k;
+        };
+        return node.transform((n) => {
+            if (!(n.isAccessorNode && n.object && n.object.isSymbolNode && n.index && n.index.dimensions)) return n;
+            const name = n.object.name, dims = n.index.dimensions;
+            if (dims.length === 1 && dims[0].isRangeNode) {
+                const r = val(dims[0]);
+                if (!r) return n;
+                return new math.ArrayNode((math.isMatrix(r) ? r.toArray() : r).map(k => new math.SymbolNode(`${name}[${check(k, name)}]`)));
+            }
+            const ks = dims.map(val);
+            if (ks.some(k => k === null)) return n;
+            return new math.SymbolNode(`${name}[${ks.map(k => check(k, name)).join(', ')}]`);
+        });
     }
 
     // Positions of the '=' signs that are not part of ==, <=, >=, != (text inside quotes is skipped)
@@ -149,10 +288,10 @@ class EESParser {
         const where = `Line ${lineNo} ('${line}')`;
         if (names.length !== def.outputs.length) throw new Error(`${where}: ${def.name}() returns ${def.outputs.length} output(s), but ${names.length} name(s) are given.`);
         try {
-            const call = UserFunctions.lowerIf(math.parse(`${m[2]}(${m[3]})`));
+            const call = this.flatIndex(UserFunctions.lowerIf(math.parse(`${m[2]}(${m[3]})`)));
             names.forEach((n, k) => {
-                if (!/^[A-Za-z_]\w*(\[\d+\])?$/.test(n)) throw new Error(`'${n}' is not a variable name`);
-                const leftAST = math.parse(n);
+                const leftAST = /^[A-Za-z_]\w*(\[[^\]]+\])?$/.test(n) ? this.flatIndex(math.parse(n)) : null;
+                if (!leftAST || !leftAST.isSymbolNode) throw new Error(`'${n}' is not a variable name`);
                 const rightAST = new math.FunctionNode(new math.SymbolNode(`${m[2]}__${k + 1}`), call.args);
                 const eqVars = new Set();
                 this.extractVariablesFromAST(leftAST, eqVars);

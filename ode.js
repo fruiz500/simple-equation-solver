@@ -186,7 +186,7 @@ class OdeBlocks {
                 lines[i] = '';
                 if (/^end\s*;?$/.test(t)) { closed = true; break; }
                 if (/^(ode|function)\b/.test(t)) throw new Error(`Line ${i + 1}: a block cannot start inside an ode block (is an 'end' missing above?).`);
-                if (t) body.push({ text: t.replace(/;\s*$/, '').trim(), no: i + 1 });
+                for (const p of t.split('\u0001')) if (p.trim()) body.push({ text: p.replace(/;\s*$/, '').trim(), no: i + 1 });
             }
             if (!closed) throw new Error(`Line ${start + 1}: this ode block has no matching 'end'.`);
             blocks.push({ header: head, no: start + 1, body });
@@ -209,9 +209,9 @@ class OdeBlocks {
     }
 
     // Compiles the blocks of this parse (string variables substituted) and builds their callables
-    static activate(blocks, strVars) {
+    static activate(blocks, strVars, flat = (n) => n) {
         const O = OdeBlocks;
-        O.active = blocks.map((b, k) => O.compile(b, k + 1, strVars));
+        O.active = blocks.map((b, k) => O.compile(b, k + 1, strVars, flat));
         O.entries = {};
         O.active.forEach(blk => {
             let lastArgs = null, last = null;
@@ -226,7 +226,7 @@ class OdeBlocks {
         });
     }
 
-    static compile(b, k, strVars) {
+    static compile(b, k, strVars, flat) {
         const where = `Line ${b.no}`;
         const sub = (txt, ln) => txt.replace(/([A-Za-z_]\w*)\$/g, (all, nm) => {
             if (!(nm in strVars)) throw new Error(`Line ${ln}: string variable '${nm}$' is not defined.`);
@@ -236,14 +236,16 @@ class OdeBlocks {
         // expression it has no effect on the calculation
         const parse = (src, ln) => {
             let node, unit = null;
+            parse.lastUnit = '';
             const um = src.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z]|1\/)[a-zA-Z0-9_\/\^\*\s\.\-\(\)]*|-)\]\s*$/);
             if (um) { unit = um[1].trim(); src = src.slice(0, um.index + 1).trim(); }
-            try { node = UserFunctions.lowerIf(math.parse(sub(src, ln))); } catch (e) { throw new Error(`Line ${ln}: ${e.message}`); }
+            try { node = flat(UserFunctions.lowerIf(math.parse(sub(src, ln)))); } catch (e) { throw new Error(`Line ${ln}: ${e.message}`); }
             if (unit) {
                 if (!UnitConv.isValid(unit)) throw new Error(`Line ${ln}: unit '${unit}' is not recognized by math.js.`);
                 let v = NaN;
                 try { if (node.filter(c => c.isSymbolNode).length === 0) v = node.evaluate({}); } catch (e) { }
                 if (typeof v === 'number' && Number.isFinite(v)) node = new math.ConstantNode(UnitConv.toSI(v, unit));
+                parse.lastUnit = unit;
             }
             node.traverse((c) => {
                 if (c.isAssignmentNode || c.isFunctionAssignmentNode || c.isBlockNode) throw new Error(`Line ${ln}: one item per line`);
@@ -268,19 +270,29 @@ class OdeBlocks {
         }
         const rangeNodes = range.map(r => parse(r, b.no));
 
-        const NAME = '([A-Za-z_]\\w*(?:\\[\\d+\\])?)';
+        const NAME = '([A-Za-z_]\\w*(?:\\[[^\\]]*\\])?)';
+        const named = (nm, ln) => {                              // T[2+1] -> T[3]; the index must be known before solving
+            if (!nm.includes('[')) return nm;
+            let nd;
+            try { nd = flat(math.parse(nm)); } catch (e) { throw new Error(`Line ${ln}: ${e.message}`); }
+            if (!nd.isSymbolNode) throw new Error(`Line ${ln}: the index in ${nm} must be known before solving.`);
+            return nd.name;
+        };
         const deriv = new Map(), init = new Map(), aux = [];
         for (const { text: t, no: ln } of b.body) {
             let m;
             if ((m = t.match(new RegExp(`^${NAME}\\s*'\\s*=\\s*(.+)$`)))) {
-                if (deriv.has(m[1])) throw new Error(`Line ${ln}: ${m[1]}' is defined twice.`);
-                deriv.set(m[1], { node: parse(m[2], ln), ln });
+                const s = named(m[1], ln);
+                if (deriv.has(s)) throw new Error(`Line ${ln}: ${s}' is defined twice.`);
+                deriv.set(s, { node: parse(m[2], ln), ln });
             } else if ((m = t.match(new RegExp(`^${NAME}\\s*\\((.+)\\)\\s*=\\s*(.+)$`)))) {
-                if (init.has(m[1])) throw new Error(`Line ${ln}: the initial value of ${m[1]} is given twice.`);
-                init.set(m[1], { at: parse(m[2], ln), node: parse(m[3], ln), ln });
-            } else if ((m = t.match(/^([A-Za-z_]\w*)\s*=\s*(.+)$/)) && !/^=/.test(m[2])) {
-                if (aux.some(a => a.name === m[1])) throw new Error(`Line ${ln}: '${m[1]}' is defined twice in this block.`);
-                aux.push({ name: m[1], node: parse(m[2], ln), ln });
+                const s = named(m[1], ln);
+                if (init.has(s)) throw new Error(`Line ${ln}: the initial value of ${s} is given twice.`);
+                init.set(s, { at: parse(m[2], ln), node: parse(m[3], ln), unit: parse.lastUnit, ln });
+            } else if ((m = t.match(new RegExp(`^${NAME}\\s*=\\s*(.+)$`))) && !/^=/.test(m[2])) {
+                const a = named(m[1], ln);
+                if (aux.some(x => x.name === a)) throw new Error(`Line ${ln}: '${a}' is defined twice in this block.`);
+                aux.push({ name: a, node: parse(m[2], ln), ln });
             } else {
                 throw new Error(`Line ${ln}: in an ode block write  y' = derivative,  y(start) = initial value,  or  name = helper expression;  got '${t}'.`);
             }
@@ -345,6 +357,7 @@ class OdeBlocks {
         const cmp = (n) => n.compile();
         return {
             pattern,
+            stateUnits: states.map(s => init.get(s).unit || ''),
             k, no: b.no, header: b.header, indep, states, inputs, opt,
             range: rangeNodes.map(cmp),
             aux: aux.map(a => ({ name: a.name, code: cmp(a.node) })),

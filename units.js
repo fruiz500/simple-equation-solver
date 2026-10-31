@@ -144,10 +144,45 @@ class UnitConsistencyChecker {
         if (spec.kind === 'ig') (spec.argUnits || []).forEach((u, i) => { if (i < rest) expected.push([i + 1, u]); });
         expected.forEach(([i, u]) => {
             const want = U.mk(U.dimsOfUnit(u));
+            if (ctx.infer && args[i] && got[i] && got[i].k === 'unk') U.inferDown(args[i], want, ctx);
             if (got[i] && U.isDim(got[i]) && !U.same(got[i], want)) {
                 U.report(ctx, `${name}() expects [${u || 'dimensionless'}] here but got [${U.nameFor(got[i].d)}] in '${node.toString()}'`);
             }
         });
+    }
+
+    static inferDown(node, d, ctx) {
+        const U = UnitConsistencyChecker;
+        if (!U.isDim(d)) return;
+        if (node.isParenthesisNode) return U.inferDown(node.content, d, ctx);
+        if (node.isSymbolNode) {
+            if (ctx.registered.has(node.name) && !ctx.dims.has(node.name)) { ctx.dims.set(node.name, d); ctx.changed = true; }
+            return;
+        }
+        if (!node.isOperatorNode) return;
+        const a = node.args;
+        if (a.length === 1) { if (node.op === '-' || node.op === '+') U.inferDown(a[0], d, ctx); return; }
+        const da = a.map(x => U.dimOf(x, ctx));
+        switch (node.op) {
+            case '+': case '-':
+                a.forEach((x, i) => { if (da[i].k === 'unk') U.inferDown(x, d, ctx); });
+                return;
+            case '*': case '.*': case '/': case './': {
+                const unk = [0, 1].filter(i => da[i].k === 'unk');
+                if (unk.length !== 1) return;
+                const i = unk[0], od = da[1 - i].k === 'dim' ? da[1 - i].d : U.zero();   // a plain number is a dimensionless factor
+                let t;
+                if (node.op === '*' || node.op === '.*') t = d.d.map((v, k) => v - od[k]);
+                else if (i === 0) t = d.d.map((v, k) => v + od[k]);                     // x / a = d  ->  x = d a
+                else t = od.map((v, k) => v - d.d[k]);                                  // a / x = d  ->  x = a / d
+                return U.inferDown(a[i], U.mk(t), ctx);
+            }
+            case '^': case '.^': {
+                const n = U.constValue(a[1]);
+                if (da[0].k === 'unk' && Number.isFinite(n) && n !== 0) U.inferDown(a[0], U.mk(d.d.map(v => v / n)), ctx);
+                return;
+            }
+        }
     }
 
     static dimOf(node, ctx) {
@@ -188,10 +223,16 @@ class UnitConsistencyChecker {
                 if (tspec.kind === 'props' || tspec.kind === 'props1' || tspec.kind === 'ha') return U.UNK;
                 return U.mk(U.dimsOfUnit(tspec.unit));
             }
+            if (name.startsWith('ode#')) {   // an ode state at the end: the unit tag of its initial value, if any
+                const m = /^ode#(\d+):(.+)$/.exec(name), blk = m && typeof OdeBlocks !== 'undefined' && OdeBlocks.active[Number(m[1]) - 1];
+                const u = blk ? blk.stateUnits[blk.states.indexOf(m[2])] : '';
+                return u ? U.mk(U.dimsOfUnit(u)) : U.UNK;
+            }
             const uf = UserFunctions.lookup(name);
             if (uf) {   // declared argument units are checked; the result has the declared output unit
                 uf.def.params.forEach((p, i) => {
                     const g = node.args[i] ? U.dimOf(node.args[i], ctx) : U.UNK;
+                    if (ctx.infer && p.unit && g.k === 'unk') U.inferDown(node.args[i], U.mk(U.dimsOfUnit(p.unit)), ctx);
                     if (p.unit && U.isDim(g) && !U.same(g, U.mk(U.dimsOfUnit(p.unit)))) {
                         U.report(ctx, `${uf.def.name}() expects [${p.unit}] for ${p.name} but got [${U.nameFor(g.d)}] in '${node.toString()}'`);
                     }
@@ -203,6 +244,7 @@ class UnitConsistencyChecker {
             const DIMLESS_IN = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
                 'asinh', 'acosh', 'atanh', 'exp', 'expm1', 'log', 'log10', 'log2', 'log1p', 'ln', 'erf'];
             if (DIMLESS_IN.includes(name)) {
+                if (ctx.infer) node.args.forEach((x, i) => { if (a[i].k === 'unk') U.inferDown(x, U.mk(U.zero()), ctx); });
                 a.forEach(x => {
                     if (U.isDim(x) && !U.isDimless(x)) U.report(ctx, `${name}() needs a dimensionless argument but got [${U.nameFor(x.d)}] in '${node.toString()}'`);
                 });
@@ -236,22 +278,31 @@ class UnitConsistencyChecker {
         });
         const declared = new Set(dims.keys());
 
-        // 2. Infer dimensions of unlabeled variables, repeating until nothing changes (order-independent)
+        // 2. Infer dimensions of unlabeled variables from the equations they are in, and from the arguments of
+        //    functions, repeating until nothing changes (order-independent)
         const nameOf = (n) => n.isSymbolNode ? n.name : (n.isAccessorNode ? n.toString() : null);
-        for (let pass = 0; pass <= parsedASTs.length; pass++) {
-            let changed = false;
-            const ctx = { registered, dims, report: null };
-            for (const eq of parsedASTs) {
-                const L = U.dimOf(eq.leftAST, ctx), R = U.dimOf(eq.rightAST, ctx);
-                const infer = (node, d) => {
-                    const n = nameOf(node);
-                    if (n && registered.has(n) && !dims.has(n) && U.isDim(d)) { dims.set(n, d); changed = true; }
-                };
-                if (U.isDim(R)) infer(eq.leftAST, R);
-                if (U.isDim(L)) infer(eq.rightAST, L);
+        const propagate = () => {
+            for (let pass = 0; pass <= parsedASTs.length; pass++) {
+                const ctx = { registered, dims, report: null, infer: true, changed: false };
+                for (const eq of parsedASTs) {
+                    const L = U.dimOf(eq.leftAST, ctx), R = U.dimOf(eq.rightAST, ctx);
+                    if (U.isDim(R)) U.inferDown(eq.leftAST, R, ctx);
+                    if (U.isDim(L)) U.inferDown(eq.rightAST, L, ctx);
+                }
+                if (!ctx.changed) break;
             }
-            if (!changed) break;
+        };
+        propagate();
+        // 2b. A variable still without a dimension that is set by a plain number (N = 20) is dimensionless
+        const plain = [];
+        const ctx0 = { registered, dims, report: null };
+        for (const eq of parsedASTs) {
+            for (const [side, other] of [[eq.leftAST, eq.rightAST], [eq.rightAST, eq.leftAST]]) {
+                const n = nameOf(side);
+                if (n && registered.has(n) && !dims.has(n) && U.dimOf(other, ctx0).k === 'lit') { dims.set(n, U.mk(U.zero())); plain.push(n); }
+            }
         }
+        if (plain.length > 0) propagate();
 
         // 3. Final pass: report every inconsistency once
         const ctx = { registered, dims, report: (m) => issues.add(m) };
@@ -273,6 +324,7 @@ class UnitConsistencyChecker {
         if (issues.size > 0) {
             console.error(`Unit check found ${issues.size} problem(s):`);
             issues.forEach(m => console.error('  ' + m));
+            if (plain.length > 0) console.log(`  Set by a plain number, so dimensionless: ${plain.slice(0, 10).join(', ')}${plain.length > 10 ? ', ...' : ''}. Give a unit tag (T = 300 [K]) to those that have units.`);
         } else {
             console.log(`Unit check passed: ${dims.size} of ${registered.size} variables have known dimensions.`);
         }

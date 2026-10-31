@@ -51,6 +51,22 @@ document.addEventListener('DOMContentLoaded', () => {
     function unitOf(name) { const m = parser.variables.get(name); return (m && UnitConv.isValid(m.unit)) ? (m.unit || '') : ''; }
     function toDisp(name, si) { return (typeof si === 'number' && Number.isFinite(si)) ? UnitConv.fromSI(si, unitOf(name)) : si; }
     function unitTag(name) { const u = unitOf(name); return u ? ` [${u}]` : ''; }
+    // Display order: order of first appearance, with the elements of each array (x[1], x[2], ..., T[1, 2]) together,
+    // at the place of the first one, and in index order (row by row for two indices)
+    function displayOrder(names) {
+        const key = (n) => { const m = /^(.*?)\[(.+)\]$/.exec(n); return m ? { g: m[1] + '[', idx: m[2].split(',').map(Number) } : { g: n, idx: [] }; };
+        const keys = new Map(names.map(n => [n, key(n)])), first = new Map();
+        names.forEach((n, i) => { const g = keys.get(n).g; if (!first.has(g)) first.set(g, i); });
+        return names.slice().sort((a, b) => {
+            const ka = keys.get(a), kb = keys.get(b);
+            if (ka.g !== kb.g) return first.get(ka.g) - first.get(kb.g);
+            for (let i = 0; i < Math.max(ka.idx.length, kb.idx.length); i++) {
+                const d = (ka.idx[i] || 0) - (kb.idx[i] || 0);
+                if (d) return d;
+            }
+            return 0;
+        });
+    }
     function fmtNum(v) {
         if (typeof v !== 'number' || !Number.isFinite(v)) return String(v);
         if (v !== 0 && Math.abs(v) < 1e-3) return v.toExponential(5);
@@ -101,7 +117,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <th style="padding:4px;">Value</th></tr></thead><tbody></tbody>`;
 
         const tbody = table.querySelector('tbody');
-        variablesMap.forEach((meta, name) => {
+        displayOrder([...variablesMap.keys()]).forEach((name) => {
+            const meta = variablesMap.get(name);
             const tr = document.createElement('tr');
             const unit = UnitConv.isValid(meta.unit) ? (meta.unit || '') : '';
             const disp = (si) => (typeof si === 'number' && Number.isFinite(si)) ? UnitConv.fromSI(si, unit) : si;
@@ -252,7 +269,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const solution = solver.solve();
 
             console.log("Solution Converged:");
-            Object.entries(solution).forEach(([varName, val]) => {
+            displayOrder(Object.keys(solution)).forEach((varName) => {
+                const val = solution[varName];
                 if (typeof val === 'number') {
                     const u = unitOf(varName);
                     console.log(`  ${varName} = ${fmtNum(toDisp(varName, val))}${u ? ' [' + u + ']' : ''}`);
@@ -384,7 +402,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-optimize').addEventListener('click', () => {
         try {
             parser.parse(editor.value);
-            const vars = Array.from(parser.variables.keys());
+            const vars = displayOrder(Array.from(parser.variables.keys()));
 
             if (vars.length === 0) {
                 alert("No variables found. Please enter equations first.");
@@ -544,7 +562,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let names;
         try {
             parser.parse(editor.value);
-            names = Array.from(parser.variables.keys());
+            names = displayOrder(Array.from(parser.variables.keys()));
         } catch (err) {
             return;   // equations are mid-edit and don't parse yet: keep the current list
         }
@@ -758,7 +776,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const rows = [];
-            parser.variables.forEach((meta, name) => {
+            displayOrder([...parser.variables.keys()]).forEach((name) => {
+                const meta = parser.variables.get(name);
                 const v = cur.get(name);
                 if (v === null || v === undefined) return;
                 const declared = UnitConv.isValid(meta.unit) ? (meta.unit || '') : '';
