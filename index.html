@@ -86,7 +86,10 @@ z = 0
 
         <!-- Panel 3: Parametric Table Sweep Controls -->
         <div class="panel" id="parametric-panel">
-            <h2>Parametric Table</h2>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2>Parametric Table</h2><button id="btn-export-table" class="secondary" style="padding:2px 8px; font-size:12px;"
+                    title="Export the table to a text file">Export...</button>
+            </div>
             <div class="param-controls">
                 <label>Var: <select id="param-var" style="width:90px;"></select></label>
                 <label>Start: <input type="number" id="param-start" value="1"></label>

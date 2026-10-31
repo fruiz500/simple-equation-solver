@@ -71,6 +71,13 @@ document.addEventListener('DOMContentLoaded', () => {
         lastResults = { text: editor.value, values };
     }
     function currentResults() { return (lastResults && sameText(lastResults.text, editor.value)) ? lastResults.values : null; }
+    // The table last shown in the Parametric Table pane, for its Export button: header cells 'name [unit]' and rows in display units
+    let lastTable = null;
+    function headerCell(name) {
+        const m = parser.variables.get(name);
+        const u = unitOf(name) || (m && m.inferredUnit) || '';
+        return u ? `${name} [${u}]` : name;
+    }
     function unitOf(name) { const m = parser.variables.get(name); return (m && UnitConv.isValid(m.unit)) ? (m.unit || '') : ''; }
     function toDisp(name, si) { return (typeof si === 'number' && Number.isFinite(si)) ? UnitConv.fromSI(si, unitOf(name)) : si; }
     function unitTag(name) { const u = unitOf(name); return u ? ` [${u}]` : ''; }
@@ -329,6 +336,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         '</tbody></table>';
                 });
                 parametricContainer.innerHTML = html;
+                lastTable = { text: editor.value, tables: OdeBlocks.tables.map(tb => ({ title: `ode block, line ${tb.no}`,
+                    header: tb.cols.map(headerCell), rows: tb.rows.map(r => r.map((v, i) => toDisp(tb.cols[i], v))) })) };
                 const tb = OdeBlocks.tables[0];
                 const plotData = tb.rows.map(r => Object.fromEntries(tb.cols.map((k, i) => [k, toDisp(k, r[i])])));
                 updatePlotControls(plotData, tb.indep, tb.states[0]);
@@ -396,6 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 html += '</tbody></table>';
                 parametricContainer.innerHTML = html;
+                lastTable = { text: editor.value, tables: [{ title: `parametric table of ${pVar}`, header: keys.map(headerCell), rows: results.map(r => keys.map(k => r[k])) }] };
 
                 // Plot independent variable vs first dependent variable
                 const yVar = keys.find(k => k !== pVar);
@@ -815,6 +825,22 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!name) return;
             lastResultsName = name;
             console.log(`Exported ${rows.length} result(s) to '${name}'.`);
+        });
+
+        // --- Export the Parametric Table pane: a header row 'name [unit]', then one row per line, tab-separated.
+        // Several ode blocks: each table under a title line, separated by a blank line ---
+        let lastTableName = 'table.txt';
+        document.getElementById('btn-export-table').addEventListener('click', async () => {
+            if (!lastTable) { console.warn('No table to export yet: run a parametric table, or Solve equations with an ode block.'); return; }
+            if (!sameText(lastTable.text, editor.value)) { console.warn('The equations changed after this table was made: run it again, then Export.'); return; }
+            const many = lastTable.tables.length > 1;
+            const text = lastTable.tables.map(tb => (many ? tb.title + '\n' : '') + tb.header.join('\t') + '\n' +
+                tb.rows.map(r => r.map(fmtNum).join('\t')).join('\n') + '\n').join('\n');
+            const name = await saveTextFile(text, lastTableName, ['.txt', '.tsv'], 'Table (tab-separated text)');
+            if (!name) return;
+            lastTableName = name;
+            const n = lastTable.tables.reduce((s, tb) => s + tb.rows.length, 0);
+            console.log(`Exported ${many ? lastTable.tables.length + ' tables, ' : ''}${n} row(s) to '${name}'.`);
         });
     })();
 
