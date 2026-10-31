@@ -129,6 +129,21 @@ button:hover {
     background-color: #0056b3;
 }
 
+#console-output .lineref {
+    color: #9cdcfe;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+#console-input {
+    margin-top: 4px;
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 12px;
+}
+
 #console-output {
     flex-grow: 1;
     background: #1e1e1e;

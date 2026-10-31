@@ -32,7 +32,7 @@
         <!-- Panel 1: Code/Equations Editor -->
         <div class="panel" id="editor-panel">
             <h2>Equations <span id="thermo-status" style="font-size:11px; font-weight:normal; color:#c00;">Thermo:
-                    CoolProp not loaded</span></h2>
+                    CoolProp not loaded</span><span id="cursor-pos" style="float:right; font-size:11px; font-weight:normal; color:#888;"></span></h2>
             <textarea id="editor" spellcheck="false">
 // SES Demo
 // 1. Direct substitution & arrays
@@ -101,6 +101,8 @@ z = 0
         <div class="panel" id="console-panel">
             <h2>Console</h2>
             <pre id="console-output"></pre>
+            <input id="console-input" type="text" spellcheck="false" autocomplete="off"
+                placeholder="> expression, Enter (e.g. enthalpy('water', 300, 101325), derivative(x^3 - 12*x, x), 5 ft to m)">
         </div>
 
         <!-- Panel 5: Plotly Interactive Chart -->

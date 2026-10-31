@@ -10,26 +10,49 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. CONSOLE REDIRECTION SYSTEM
     // ==========================================
     // Redirects console.log and console.error messages directly into the UI Console panel
+    // Console text is escaped; 'line 12' and 'lines 3, 5' become links that select that line in the editor
+    function appendConsole(text) {
+        const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        consoleOutput.insertAdjacentHTML('beforeend', esc.replace(/\b([Ll]ines?) (\d+(?:, \d+)*)/g, (all, w, nums) =>
+            w + ' ' + nums.split(', ').map(n => `<span class="lineref" data-line="${n}" title="Show line ${n}">${n}</span>`).join(', ')));
+        consoleOutput.scrollTop = consoleOutput.scrollHeight;
+    }
+    // Line and column of the cursor, next to the Equations title
+    const cursorPos = document.getElementById('cursor-pos');
+    function showCursor() {
+        const before = editor.value.slice(0, editor.selectionStart).split('\n');
+        if (cursorPos) cursorPos.textContent = `Ln ${before.length}, Col ${before[before.length - 1].length + 1}`;
+    }
+    ['input', 'keyup', 'click', 'select', 'focus'].forEach(ev => editor.addEventListener(ev, showCursor));
+    function selectLine(n) {
+        const lines = editor.value.split('\n');
+        if (!(n >= 1 && n <= lines.length)) return;
+        const start = lines.slice(0, n - 1).reduce((s, l) => s + l.length + 1, 0);
+        editor.focus();
+        editor.setSelectionRange(start, start + lines[n - 1].length);
+        const cs = getComputedStyle(editor), lh = parseFloat(cs.lineHeight) || 1.2 * parseFloat(cs.fontSize);
+        editor.scrollTop = Math.max(0, (n - 1) * lh - editor.clientHeight / 3);
+        showCursor();
+    }
+    consoleOutput.addEventListener('click', (e) => { const n = e.target.dataset && e.target.dataset.line; if (n) selectLine(Number(n)); });
+
     const originalLog = console.log;
     console.log = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-        consoleOutput.textContent += message + '\n';
-        consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        appendConsole(message + '\n');
         originalLog.apply(console, args);
     };
 
     const originalError = console.error;
     console.error = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-        consoleOutput.textContent += 'ERROR: ' + message + '\n';
-        consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        appendConsole('ERROR: ' + message + '\n');
         originalError.apply(console, args);
     };
     const originalWarn = console.warn;
     console.warn = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-        consoleOutput.textContent += 'WARNING: ' + message + '\n';
-        consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        appendConsole('WARNING: ' + message + '\n');
         originalWarn.apply(console, args);
     };
 
@@ -792,6 +815,60 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!name) return;
             lastResultsName = name;
             console.log(`Exported ${rows.length} result(s) to '${name}'.`);
+        });
+    })();
+
+    // --- Console command line: an expression for a quick answer. Everything the equations can use is available
+    // (math.js, property functions, user functions) plus the results of the last Solve, in SI. 'x = ...' keeps a
+    // value for later lines. derivative(), simplify() and rationalize() also take unquoted formulas.
+    (function () {
+        const input = document.getElementById('console-input');
+        if (!input) return;
+        const kept = {}, history = [];
+        let hpos = 0;
+        const SYMBOLIC = { derivative: [0, 1], simplify: [0], rationalize: [0] };   // arguments that are formulas
+        const quote = (node) => node.transform((n) => {
+            if (!(n.isFunctionNode && n.fn.isSymbolNode && SYMBOLIC[n.fn.name])) return n;
+            const args = n.args.map((a, i) => (SYMBOLIC[n.fn.name].includes(i) && !(a.isConstantNode && typeof a.value === 'string'))
+                ? new math.ConstantNode(a.toString()) : a);
+            return new math.FunctionNode(n.fn, args);
+        });
+        const show = (v) => {
+            if (v && v.isNode) return v.toString();
+            if (typeof v === 'function') return `function ${v.name || ''}`.trim();
+            if (typeof v === 'number') return String(+v.toPrecision(10));
+            return math.format(v, { precision: 10 });
+        };
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                if (!history.length) return;
+                hpos = Math.min(history.length, Math.max(0, hpos + (e.key === 'ArrowUp' ? -1 : 1)));
+                input.value = history[hpos] || '';
+                e.preventDefault();
+                return;
+            }
+            if (e.key !== 'Enter') return;
+            const src = input.value.trim();
+            if (!src) return;
+            history.push(src); hpos = history.length; input.value = '';
+            console.log('> ' + src);
+            try {
+                const node = quote(math.parse(src));
+                node.traverse((c) => {
+                    if (c.isFunctionNode && c.fn.isSymbolNode && ['createUnit', 'import', 'config'].includes(c.fn.name)) {
+                        throw new Error(`${c.fn.name}() is not available: it would change the settings of the solver`);
+                    }
+                });
+                const base = {};
+                (currentResults() || new Map()).forEach((v, k) => { base[k] = v; });
+                const scope = Object.assign(BoundedSolver.prototype.createScopeWithCoolProp(base), kept);
+                const v = node.compile().evaluate(scope);
+                if (node.isAssignmentNode && node.object.isSymbolNode && !node.index) kept[node.object.name] = v;
+                if (node.isFunctionAssignmentNode) kept[node.name] = v;
+                console.log('  ' + show(v));
+            } catch (err) {
+                console.error(err.message);
+            }
         });
     })();
 

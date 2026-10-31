@@ -229,13 +229,29 @@ class UserFunctions {
     }
 
     // Inline  if(condition, a, b)  ->  math.js conditional node (same as  condition ? a : b): only the chosen branch is evaluated
+    // Also:  derivative(expression, x)  ->  the derivative, worked out symbolically before solving (math.js)
     static lowerIf(node) {
         return node.transform((n) => {
+            if (n.isFunctionNode && n.fn.isSymbolNode && n.fn.name === 'derivative') return UserFunctions.lowerDerivative(n);
             if (!(n.isFunctionNode && n.fn.isSymbolNode && n.fn.name === 'if')) return n;
             if (n.args.length !== 3) throw new Error(`if() takes 3 arguments, if(condition, value if true, value if false), but got ${n.args.length}`);
             const [c, a, b] = n.args.map(x => UserFunctions.lowerIf(x));
             return new math.ConditionalNode(c, a, b);
         });
+    }
+
+    static lowerDerivative(n) {
+        if (n.args.length !== 2) throw new Error('derivative() takes 2 arguments: derivative(expression, x)');
+        const [ex, x] = n.args.map(a => (a.isConstantNode && typeof a.value === 'string') ? math.parse(a.value) : a);
+        if (!x.isSymbolNode) throw new Error('in derivative(expression, x), x must be a variable name');
+        const expr = UserFunctions.lowerIf(ex).transform(c => (c.isFunctionNode && c.fn.isSymbolNode && c.fn.name === 'ln')
+            ? new math.FunctionNode(new math.SymbolNode('log'), c.args) : c);      // ln is our name for log
+        try { return math.derivative(expr, x.name); }
+        catch (e) {
+            const fn = (/function "?([A-Za-z_]\w*)/i.exec(e.message) || [])[1];
+            throw new Error(`derivative(): ${fn ? `'${fn}' cannot be differentiated symbolically` : e.message}. Only written-out formulas can be ` +
+                "(+ - * / ^, sqrt, exp, log, sin, ...); property and user functions are computed numerically. For property derivatives use props('d(H)/d(T)|P', ...).");
+        }
     }
 
     // name or name__k  ->  { def, k } (for the unit checker)
