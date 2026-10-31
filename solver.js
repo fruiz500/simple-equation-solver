@@ -64,49 +64,76 @@ class BoundedSolver {
         return state;
     }
 
+    // 'line 12' or 'lines 3, 5, 9' (equation text where the line is unknown), for messages
+    eqLabel(list) {
+        const eqs = [].concat(list).map(i => this.parsedASTs[i]);
+        const nums = [...new Set(eqs.filter(eq => eq.lineNo).map(eq => eq.lineNo))].sort((a, b) => a - b);
+        const texts = eqs.filter(eq => !eq.lineNo).map(eq => `'${eq.lineRaw || (eq.leftAST + ' = ' + eq.rightAST)}'`);
+        return [nums.length ? `line${nums.length > 1 ? 's' : ''} ${nums.join(', ')}` : '', ...texts].filter(Boolean).join(', ');
+    }
+
     /**
-     * Topological Dependency Partitioning Algorithm
+     * Block decomposition. Each equation is matched to one unknown that it determines (augmenting paths); the
+     * equations are then grouped into the strongly connected components of their dependency graph (Tarjan).
+     * A component is the smallest set of equations that must be solved together; components come out in the
+     * order in which they can be solved. Equations left without an unknown are checked at the end.
      */
     partitionEquations() {
-        const blocks = [];
-        const handledEqs = new Set();
-        const knownVars = new Set();
+        const eqs = this.parsedASTs, n = eqs.length;
 
-        // Step 1: Topological Sort - Find explicit direct substitution equations
-        let progress = true;
-        while (progress) {
-            progress = false;
-            for (let i = 0; i < this.parsedASTs.length; i++) {
-                if (handledEqs.has(i)) continue;
-                const eq = this.parsedASTs[i];
-                const unknowns = eq.vars.filter(v => !knownVars.has(v));
-
-                if (unknowns.length === 1) {
-                    blocks.push({ type: 'single', eqIndex: i, targetVar: unknowns[0] });
-                    handledEqs.add(i); knownVars.add(unknowns[0]); progress = true;
-                } else if (unknowns.length === 0) {
-                    blocks.push({ type: 'check', eqIndex: i });
-                    handledEqs.add(i); progress = true;
-                }
+        // 1. Matching: eqVar[i] = the unknown equation i determines; varEq: the reverse
+        const eqVar = new Array(n).fill(null), varEq = new Map();
+        const augment = (i, seen) => {
+            for (const v of eqs[i].vars) {
+                if (seen.has(v)) continue;
+                seen.add(v);
+                const j = varEq.get(v);
+                if (j === undefined || augment(j, seen)) { eqVar[i] = v; varEq.set(v, i); return true; }
             }
+            return false;
+        };
+        for (let i = 0; i < n; i++) {                     // cheap first pass: a still-free variable
+            const v = eqs[i].vars.find(x => !varEq.has(x));
+            if (v !== undefined) { eqVar[i] = v; varEq.set(v, i); }
+        }
+        for (let i = 0; i < n; i++) if (eqVar[i] === null && eqs[i].vars.length) augment(i, new Set());
+
+        const allVars = new Set();
+        eqs.forEach(eq => eq.vars.forEach(v => allVars.add(v)));
+        const loose = [...allVars].filter(v => !varEq.has(v));
+        if (loose.length > 0) {
+            const extra = eqs.map((eq, i) => i).filter(i => eqVar[i] === null && eqs[i].vars.length);
+            throw new Error(`The equations do not determine ${loose.join(', ')}.` + (extra.length
+                ? ` The equation(s) at ${this.eqLabel(extra)} add no new information (redundant with, or contradicting, the others); replace them by equations involving ${loose.join(', ')}.`
+                : ' Add equations involving them.'));
         }
 
-        // Step 2: Group remaining coupled cyclic equations into simultaneous solver blocks
-        const remainingEqs = [];
-        const blockVars = new Set();
-        for (let i = 0; i < this.parsedASTs.length; i++) {
-            if (!handledEqs.has(i)) {
-                remainingEqs.push(i);
-                this.parsedASTs[i].vars.forEach(v => {
-                    if (!knownVars.has(v)) blockVars.add(v);
-                });
+        // 2. Tarjan's strongly connected components; equation i depends on the equations that determine its other variables
+        const index = new Array(n).fill(-1), low = new Array(n).fill(0), onStack = new Array(n).fill(false);
+        const stack = [], blocks = [];
+        let counter = 0;
+        const visit = (i) => {
+            index[i] = low[i] = counter++;
+            stack.push(i); onStack[i] = true;
+            for (const v of eqs[i].vars) {
+                if (v === eqVar[i]) continue;
+                const j = varEq.get(v);
+                if (index[j] < 0) { visit(j); low[i] = Math.min(low[i], low[j]); }
+                else if (onStack[j]) low[i] = Math.min(low[i], index[j]);
             }
-        }
+            if (low[i] === index[i]) {
+                const comp = [];
+                let j;
+                do { j = stack.pop(); onStack[j] = false; comp.push(j); } while (j !== i);
+                comp.sort((a, b) => a - b);
+                if (comp.length === 1) blocks.push({ type: 'single', eqIndex: i, targetVar: eqVar[i] });
+                else blocks.push({ type: 'simultaneous', eqIndices: comp, vars: comp.map(k => eqVar[k]) });
+            }
+        };
+        for (let i = 0; i < n; i++) if (eqVar[i] !== null && index[i] < 0) visit(i);
 
-        if (remainingEqs.length > 0) {
-            blocks.push({ type: 'simultaneous', eqIndices: remainingEqs, vars: Array.from(blockVars) });
-        }
-
+        // 3. Equations without an unknown of their own are consistency checks
+        for (let i = 0; i < n; i++) if (eqVar[i] === null) blocks.push({ type: 'check', eqIndex: i });
         return blocks;
     }
 
@@ -145,8 +172,15 @@ class BoundedSolver {
         this.solveSimultaneousBlock([eqIndex], [targetVar], state);
     }
 
+    // Sets a variable in an equation scope, including its slot in the array that x[k] expressions read
+    static setVar(scope, name, value) {
+        scope[name] = value;
+        const m = name.match(/^([a-zA-Z0-9_]+)\[(\d+)\]$/);
+        if (m && Array.isArray(scope[m[1]])) scope[m[1]][Number(m[2]) - 1] = value;
+    }
+
     /**
-     * Multivariate Newton-Raphson Solver with Numerical Jacobian for coupled equations
+     * Damped Newton method with a finite-difference Jacobian and a Levenberg-Marquardt fallback, for one block
      */
     solveSimultaneousBlock(eqIndices, vars, state) {
         const n = vars.length;
@@ -154,32 +188,47 @@ class BoundedSolver {
             throw new Error(`Coupled block is not square: ${eqIndices.length} equation(s), ${n} unknown(s) [${vars.join(', ')}]. Check for a missing or redundant equation.`);
         }
         const eqs = eqIndices.map(i => this.parsedASTs[i]);
+        eqs.forEach(eq => { if (!eq.code) eq.code = [eq.leftAST.compile(), eq.rightAST.compile()]; });   // compile once, not per evaluation
         const metas = vars.map(v => this.variablesMap.get(v) || { lower: -Infinity, upper: Infinity });
+        const rowsOf = vars.map(v => eqs.map((eq, i) => i).filter(i => eqs[i].vars.includes(v)));        // equations containing each unknown
 
-        // Residual f = left - right for every equation at trial point X
-        const residuals = (X) => {
-            const local = { ...state };
-            vars.forEach((v, k) => local[v] = X[k]);
-            const scope = this.createScopeWithCoolProp(local);
-            return eqs.map(({ leftAST, rightAST }) => {
-                const L = leftAST.evaluate(scope), R = rightAST.evaluate(scope);
-                return { f: L - R, mag: Math.max(Math.abs(L), Math.abs(R)) };
-            });
+        // One scope for the whole block; trial values are written into it
+        const scope = this.createScopeWithCoolProp({ ...state });
+        const setX = (X) => vars.forEach((v, k) => BoundedSolver.setVar(scope, v, X[k]));
+        const evalEq = (i) => {
+            const L = eqs[i].code[0].evaluate(scope), R = eqs[i].code[1].evaluate(scope);
+            return { f: L - R, mag: Math.max(Math.abs(L), Math.abs(R)) };
         };
+        // Residual f = left - right for every equation at trial point X
+        const residuals = (X) => { setX(X); return eqs.map((eq, i) => evalEq(i)); };
         const clamp = (X) => X.map((x, k) => Math.min(Math.max(x, metas[k].lower), metas[k].upper));
-        // Merit: relative for large quantities, absolute for quantities below 1
-        const merit = (r) => Math.max(...r.map(e => Math.abs(e.f) / Math.max(e.mag, 1)));
-        const isConverged = (r) => r.every(e => Number.isFinite(e.f) && Math.abs(e.f) <= this.tolerance * e.mag + 1e-14);
+
+        // Size of each equation: the larger of its two sides and of its terms, a term's size being estimated from the
+        // Jacobian as |dF/dx_j * x_j|. So  0 = m*(h1 - h2) + Q  is judged against the size of m*h1, not of 0.
+        let termMag = new Array(n).fill(0);
+        const size = (e, i) => Math.max(e.mag, termMag[i]);
+        // Merit: root-sum-square of the residuals, each divided by its equation's size (relative for large quantities,
+        // absolute below 1). The scales are frozen during each Newton iteration, so the Newton step is a descent
+        // direction for the merit and step halving can always make progress.
+        let scales = null;
+        const merit = (r) => Math.sqrt(r.reduce((s, e, i) => s + (e.f / scales[i]) ** 2, 0));
+        const isConverged = (r) => r.every((e, i) => Number.isFinite(e.f) && Math.abs(e.f) <= this.tolerance * size(e, i) + 1e-14);
+
+        // Central differences; each column re-evaluates only the equations that contain that unknown
+        let lastJ = null, lastJX = null;
         const jacobian = (X) => {
             const J = eqs.map(() => new Array(n).fill(0));
+            setX(X);
             for (let j = 0; j < n; j++) {
                 const h = Math.max(Math.abs(X[j]), 1e-3) * 1e-6;
-                const Xp = X.slice(), Xm = X.slice(); Xp[j] += h; Xm[j] -= h;
-                const rp = residuals(Xp), rm = residuals(Xm);
-                for (let i = 0; i < n; i++) {
-                    if (eqs[i].vars.includes(vars[j])) J[i][j] = (rp[i].f - rm[i].f) / (2 * h);
-                }
+                BoundedSolver.setVar(scope, vars[j], X[j] + h);
+                const fp = rowsOf[j].map(evalEq);
+                BoundedSolver.setVar(scope, vars[j], X[j] - h);
+                const fm = rowsOf[j].map(evalEq);
+                BoundedSolver.setVar(scope, vars[j], X[j]);
+                rowsOf[j].forEach((i, k) => { J[i][j] = (fp[k].f - fm[k].f) / (2 * h); });
             }
+            lastJ = J; lastJX = X;
             return J;
         };
         // Try a step direction with step halving; returns true if the merit function decreased
@@ -196,12 +245,29 @@ class BoundedSolver {
         };
 
         let X = clamp(vars.map(v => state[v]));
-        let r = residuals(X), err = merit(r);
+        let r = residuals(X), err, refine = 0, converged = false;
+        const rescale = () => { scales = r.map((e, i) => Math.max(size(e, i), 1)); err = merit(r); };
+        rescale();
 
-        for (let iter = 0; iter < this.maxIterations && !isConverged(r); iter++) {
+        for (let iter = 0; iter < this.maxIterations; iter++) {
             const J = jacobian(X), negF = r.map(e => -e.f);
-            let ok = false;
-            try { ok = tryStep(math.lusolve(J, negF).flat()); } catch (e) { ok = false; }
+            termMag = J.map(row => row.reduce((m, a, j) => Math.max(m, Math.abs(a * X[j])), 0));
+            rescale();
+            let dX = null;
+            try { dX = math.lusolve(J, negF).flat(); } catch (e) { dX = null; }
+            if (isConverged(r)) {
+                // Small residuals. Stop when the Newton step is negligible too: in an ill-conditioned system (a long
+                // chain of nodes, say) small residuals can still be measurably far from the solution.
+                converged = true;
+                if (!dX || refine >= 3 || dX.every((d, k) => Math.abs(d) <= 1e-10 * Math.max(Math.abs(X[k]), 1e-3))) break;
+                let rn = null;
+                const Xn = clamp(X.map((x, k) => x + dX[k]));
+                try { rn = residuals(Xn); } catch (e) { rn = null; }
+                if (!rn || !isConverged(rn)) break;
+                X = Xn; r = rn; refine++;
+                continue;
+            }
+            let ok = dX ? tryStep(dX) : false;
             if (!ok) {
                 // Levenberg-Marquardt fallback: (J'J + lambda*I) dX = -J'f  (handles singular / poor-guess cases)
                 const Jt = math.transpose(J), JtJ = math.multiply(Jt, J), g = math.multiply(Jt, negF);
@@ -215,15 +281,15 @@ class BoundedSolver {
         }
 
         vars.forEach((v, k) => state[v] = X[k]);
-        if (!isConverged(r)) {
-            throw new Error(`Newton iteration did not converge for [${vars.join(', ')}] (worst scaled residual ${err.toExponential(2)}). Try better guesses or tighter bounds.`);
+        if (!converged && !isConverged(r)) {
+            throw new Error(`Newton iteration did not converge for [${vars.join(', ')}] in the equations at ${this.eqLabel(eqIndices)} (scaled residual ${err.toExponential(2)}). Try better guesses or tighter bounds.`);
         }
-        // Warn when the solution is not unique (singular Jacobian)
+        // Warn when the solution is not unique: a (nearly) zero pivot of the row-scaled Jacobian
         try {
-            const J = jacobian(X);
-            const rowNorms = J.map(row => Math.sqrt(row.reduce((s, a) => s + a * a, 0)) || 1);
-            const detRel = Math.abs(math.det(J)) / rowNorms.reduce((a, b) => a * b, 1);
-            if (!(detRel > 1e-10)) console.log(`WARNING: Jacobian of block [${vars.join(', ')}] is (nearly) singular; the solution may not be unique.`);
+            const J = (lastJX === X) ? lastJ : jacobian(X);
+            const Js = J.map(row => { const s = Math.sqrt(row.reduce((q, a) => q + a * a, 0)) || 1; return row.map(a => a / s); });
+            const U = math.lup(Js).U, piv = (Array.isArray(U) ? U : U.toArray()).map((row, k) => Math.abs(row[k]));
+            if (!(Math.min(...piv) > 1e-10 * Math.max(...piv))) console.log(`WARNING: Jacobian of block [${vars.join(', ')}] is (nearly) singular; the solution may not be unique.`);
         } catch (e) { }
     }
 

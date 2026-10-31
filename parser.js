@@ -103,7 +103,7 @@ class EESParser {
                 this.rawEquations.push({ leftStr: parts[0].trim(), rightStr: parts[1].trim(), lineRaw: line });
 
                 // THE FIX: Added `lineRaw: line` so the Unit Checker can print the equation
-                this.parsedASTs.push({ leftAST, rightAST, vars: Array.from(eqVars), lineRaw: line });
+                this.parsedASTs.push({ leftAST, rightAST, vars: Array.from(eqVars), lineRaw: line, lineNo });
             } catch (err) {
                 throw new Error(`Line ${lineNo} ('${line}'): ${err.message}`);
             }
@@ -139,7 +139,7 @@ class EESParser {
                 this.extractVariablesFromAST(leftAST, eqVars);
                 this.extractVariablesFromAST(rightAST, eqVars);
                 this.rawEquations.push({ leftStr: n, rightStr: rightAST.toString(), lineRaw: line });
-                this.parsedASTs.push({ leftAST, rightAST, vars: Array.from(eqVars), lineRaw: line });
+                this.parsedASTs.push({ leftAST, rightAST, vars: Array.from(eqVars), lineRaw: line, lineNo });
             });
         } catch (err) { throw new Error(`${where}: ${err.message}`); }
     }
