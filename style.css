@@ -1,0 +1,242 @@
+/* CSS Reset and CSS Grid 2x3 Layout */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f9;
+    color: #333;
+    height: 100vh;
+    padding: 10px;
+}
+
+.container {
+    display: flex;
+    height: 100%;
+}
+
+.col {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+}
+
+.panel {
+    flex: 1 1 0;
+    min-height: 90px;
+    min-width: 0;
+}
+
+#editor-panel {
+    flex: 2 1 0;
+}
+
+/* editor : console = 2 : 1, as before */
+.gutter {
+    flex: 0 0 8px;
+    background: #dcdce4;
+    border-radius: 3px;
+    touch-action: none;
+}
+
+.gutter:hover,
+.gutter:active {
+    background: #007bff;
+}
+
+.gutter-v {
+    cursor: col-resize;
+}
+
+.gutter-h {
+    cursor: row-resize;
+}
+
+.panel {
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Grid Panel Placement */
+#editor-panel {
+    grid-column: 1 / 2;
+    grid-row: 1 / 3;
+}
+
+#console-panel {
+    grid-column: 1 / 2;
+    grid-row: 3 / 4;
+}
+
+#variables-panel {
+    grid-column: 2 / 3;
+    grid-row: 1 / 2;
+}
+
+#parametric-panel {
+    grid-column: 2 / 3;
+    grid-row: 2 / 3;
+}
+
+#plot-panel {
+    grid-column: 2 / 3;
+    grid-row: 3 / 4;
+}
+
+/* Component Styling */
+h2 {
+    font-size: 14px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 4px;
+}
+
+textarea {
+    flex-grow: 1;
+    resize: none;
+    font-family: monospace;
+    font-size: 14px;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+}
+
+button {
+    padding: 8px 16px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+
+#console-output {
+    flex-grow: 1;
+    background: #1e1e1e;
+    color: #00ff00;
+    padding: 8px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+}
+
+#plot-container,
+#variables-container,
+#parametric-container {
+    flex-grow: 1;
+    overflow-y: auto;
+}
+
+.clickable-badge {
+    color: #007bff;
+    cursor: pointer;
+    text-decoration: underline;
+    font-weight: bold;
+}
+
+.clickable-badge:hover {
+    color: #0056b3;
+}
+
+/* Modal Inspector Styles for inspecting Matrices and Vectors */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-content {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    width: 80%;
+    max-width: 600px;
+    max-height: 80%;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-weight: bold;
+}
+
+.modal-close {
+    cursor: pointer;
+    color: red;
+    font-weight: bold;
+}
+
+.modal-body {
+    overflow: auto;
+    flex-grow: 1;
+    font-family: monospace;
+    font-size: 13px;
+}
+
+table.matrix-table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+table.matrix-table td {
+    border: 1px solid #ccc;
+    padding: 4px;
+    text-align: center;
+}
+
+.param-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    align-items: center;
+}
+
+.param-controls input {
+    width: 60px;
+    padding: 2px;
+}
+
+/* Remove up-down value buttons (spinners) from number inputs */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;
+    /* Firefox */
+    appearance: textfield;
+    /* Firefox */
+}

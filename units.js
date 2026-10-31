@@ -1,0 +1,288 @@
+// Units: SI conversion (UnitConv) and the dimensional-analysis checker (UnitConsistencyChecker).
+// --- Unit conversion helper: everything internal is SI; math.js supplies the conversion factors ---
+class UnitConv {
+    static cache = new Map();
+    // Affine coefficients so that  SI = a + b * value_in_unit  (a is nonzero only for offset units: degC, degF)
+    static coef(unit) {
+        const u = String(unit || '').trim();
+        if (u === '' || u === '-' || u === '1') return { a: 0, b: 1 };
+        let c = UnitConv.cache.get(u);
+        if (!c) {
+            const siStr = math.unit(1, u).toSI().formatUnits();      // throws if math.js does not know the unit
+            const v0 = math.unit(0, u).toNumber(siStr);
+            const v1 = math.unit(1, u).toNumber(siStr);
+            c = { a: v0, b: +(v1 - v0).toPrecision(15) };
+            UnitConv.cache.set(u, c);
+        }
+        return c;
+    }
+    static isValid(unit) { try { UnitConv.coef(unit); return true; } catch (e) { return false; } }
+    static toSI(value, unit) { const c = UnitConv.coef(unit); return c.a + value * c.b; }
+    static fromSI(si, unit) { const c = UnitConv.coef(unit); return (si - c.a) / c.b; }
+}
+
+// --- Unit Consistency Engine ---
+// --- Unit Consistency Engine: dimensional analysis with inference ---
+// Dimension vectors follow math.js base order: [mass, length, time, current, temperature, luminous, amount, angle, bit]
+// Angle and bit are ignored (treated as dimensionless).
+class UnitConsistencyChecker {
+    static LIT = { k: 'lit' };   // a bare number: adopts whatever dimension it meets
+    static UNK = { k: 'unk' };   // dimension not known (yet)
+    static zero() { return new Array(9).fill(0); }
+    static mk(d) { return { k: 'dim', d }; }
+    static isDim(x) { return x.k === 'dim'; }
+    static isDimless(x) { return x.d.every(v => Math.abs(v) < 1e-9); }
+    static same(a, b) { return a.d.every((v, i) => Math.abs(v - b.d[i]) < 1e-9); }
+
+    // Return value of each property function, and the dimension expected for keyed arguments
+    static KEY_DIM = {
+        t: 'K', temperature: 'K', p: 'Pa', pressure: 'Pa', h: 'J/kg', enthalpy: 'J/kg',
+        s: 'J/(kg K)', entropy: 'J/(kg K)', d: 'kg/m^3', density: 'kg/m^3',
+        u: 'J/kg', internalenergy: 'J/kg', q: '', quality: '', x: '', v: 'm^3/kg', specificvolume: 'm^3/kg'
+    };
+    static HA_DIM = { T: 'K', Tdb: 'K', B: 'K', Twb: 'K', D: 'K', Tdp: 'K', P: 'Pa', R: '', RH: '', W: '', Omega: '' };
+    static NAMED = ['Pa', 'J', 'W', 'N', 'J/kg', 'J/(kg K)', 'W/(m K)', 'W/(m^2 K)', 'W/m^2', 'Pa s',
+        'kg/m^3', 'm^3/kg', 'm/s', 'm^2/s', 'm^2', 'm^3', 'kg/s', 'm^3/s', 'J/K', 'W/K', 'K/W',
+        '1/s', 'K', 'm', 'kg', 's', 'A', 'mol', 'J/mol', 'J/(mol K)'];
+
+    static dimsOfUnit(unitStr) {
+        const s = String(unitStr).trim();
+        const d = UnitConsistencyChecker.zero();
+        if (s === '' || s === '-' || s === '1') return d;
+        math.unit(1, s).units.forEach(c => c.unit.base.dimensions.forEach((e, i) => d[i] += e * c.power));
+        d[7] = 0; d[8] = 0;
+        return d;
+    }
+
+    // Readable unit string for a dimension vector (a named unit if one matches, else base units)
+    static nameFor(vec) {
+        const U = UnitConsistencyChecker;
+        if (!U._names) {
+            U._names = new Map();
+            U.NAMED.forEach(n => { const k = U.dimsOfUnit(n).join(','); if (!U._names.has(k)) U._names.set(k, n); });
+        }
+        if (vec.every(v => Math.abs(v) < 1e-9)) return '1';
+        const hit = U._names.get(vec.join(','));
+        if (hit) return hit;
+        const sym = ['kg', 'm', 's', 'A', 'K', 'cd', 'mol'], num = [], den = [];
+        sym.forEach((s, i) => {
+            const e = vec[i];
+            if (Math.abs(e) < 1e-9) return;
+            const term = Math.abs(Math.abs(e) - 1) < 1e-9 ? s : `${s}^${+Math.abs(e).toFixed(4)}`;
+            (e > 0 ? num : den).push(term);
+        });
+        return (num.join(' ') || '1') + (den.length ? ' / ' + (den.length > 1 ? `(${den.join(' ')})` : den[0]) : '');
+    }
+
+    static report(ctx, msg) { if (ctx.report) ctx.report(msg); }
+    static scale(x, f) { return x.k === 'dim' ? UnitConsistencyChecker.mk(x.d.map(v => v * f)) : x; }
+
+    static constValue(node) {
+        try { const v = node.evaluate({}); return typeof v === 'number' ? v : NaN; } catch (e) { return NaN; }
+    }
+
+    // Terms that are added/subtracted (or passed to min/max) must share one dimension
+    static addDims(list, ctx, node) {
+        const U = UnitConsistencyChecker;
+        const known = list.filter(U.isDim);
+        if (known.length === 0) return list.some(x => x.k === 'unk') ? U.UNK : U.LIT;
+        for (const k of known.slice(1)) {
+            if (!U.same(known[0], k)) {
+                U.report(ctx, `Cannot combine [${U.nameFor(known[0].d)}] and [${U.nameFor(k.d)}] in '${node.toString()}'`);
+                return U.UNK;
+            }
+        }
+        return known[0];
+    }
+
+    static mulDims(list, signs) {
+        const U = UnitConsistencyChecker;
+        const vec = U.zero();
+        let anyDim = false;
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].k === 'unk') return U.UNK;
+            if (list[i].k === 'dim') { anyDim = true; list[i].d.forEach((v, j) => vec[j] += signs[i] * v); }
+        }
+        return anyDim ? U.mk(vec) : U.LIT;
+    }
+
+    static powDims(b, ex, exNode, ctx, node) {
+        const U = UnitConsistencyChecker;
+        if (U.isDim(ex) && !U.isDimless(ex)) {
+            U.report(ctx, `Exponent must be dimensionless but is [${U.nameFor(ex.d)}] in '${node.toString()}'`);
+        }
+        if (b.k === 'lit') return ex.k === 'lit' ? U.LIT : (U.isDim(ex) ? U.mk(U.zero()) : U.UNK);
+        if (b.k === 'unk') return U.UNK;
+        const n = U.constValue(exNode);
+        if (Number.isFinite(n)) return U.mk(b.d.map(v => v * n));
+        return U.isDimless(b) ? b : U.UNK;
+    }
+
+    static checkPropArgs(name, args, ctx, node, spec) {
+        const U = UnitConsistencyChecker;
+        const got = args.map(x => U.dimOf(x, ctx));
+        const rest = args.length - 1;
+        const expected = [];   // [argument index, unit string]
+        const keyed = (ki, vi, map, exact) => {
+            const kn = args[ki];
+            if (kn && kn.isConstantNode && typeof kn.value === 'string') {
+                const u = map[exact ? kn.value : kn.value.toLowerCase()];
+                if (u !== undefined) expected.push([vi, u]);
+            }
+        };
+        if (spec.kind === 'state') {
+            if (rest === 2) expected.push([1, 'K'], [2, 'Pa']);
+            else if (rest === 4) { keyed(1, 2, U.KEY_DIM); keyed(3, 4, U.KEY_DIM); }
+        } else if (spec.kind === 'sat') {
+            if (rest === 1 && spec.argUnit) expected.push([1, spec.argUnit]);
+            else if (rest === 2) keyed(1, 2, U.KEY_DIM);
+        } else if (spec.kind === 'props') {
+            keyed(2, 3, U.KEY_DIM); keyed(4, 5, U.KEY_DIM);
+        } else if (spec.kind === 'ha') {
+            keyed(1, 2, U.HA_DIM, true); keyed(3, 4, U.HA_DIM, true); keyed(5, 6, U.HA_DIM, true);
+        }
+        if (spec.kind === 'ig') (spec.argUnits || []).forEach((u, i) => { if (i < rest) expected.push([i + 1, u]); });
+        expected.forEach(([i, u]) => {
+            const want = U.mk(U.dimsOfUnit(u));
+            if (got[i] && U.isDim(got[i]) && !U.same(got[i], want)) {
+                U.report(ctx, `${name}() expects [${u || 'dimensionless'}] here but got [${U.nameFor(got[i].d)}] in '${node.toString()}'`);
+            }
+        });
+    }
+
+    static dimOf(node, ctx) {
+        const U = UnitConsistencyChecker;
+        if (node.isConstantNode) return typeof node.value === 'number' ? U.LIT : U.UNK;
+        if (node.isParenthesisNode) return U.dimOf(node.content, ctx);
+        if (node.isConditionalNode) {   // if(c, a, b) and c ? a : b
+            U.dimOf(node.condition, ctx);
+            return U.addDims([U.dimOf(node.trueExpr, ctx), U.dimOf(node.falseExpr, ctx)], ctx, node);
+        }
+        if (node.isSymbolNode) return ctx.registered.has(node.name) ? (ctx.dims.get(node.name) || U.UNK) : U.LIT;
+        if (node.isAccessorNode) { const n = node.toString(); return ctx.dims.get(n) || U.UNK; }
+
+        if (node.isOperatorNode) {
+            const a = node.args.map(x => U.dimOf(x, ctx));
+            if (a.length === 1) return a[0];
+            switch (node.op) {
+                case '+': case '-': return U.addDims(a, ctx, node);
+                case '*': case '.*': return U.mulDims(a, [1, 1]);
+                case '/': case './': return U.mulDims(a, [1, -1]);
+                case '^': case '.^': return U.powDims(a[0], a[1], node.args[1], ctx, node);
+                case '<': case '>': case '<=': case '>=': case '==': case '!=': U.addDims(a, ctx, node); return U.LIT;
+                case 'and': case 'or': case 'xor': return U.LIT;
+                default: return U.UNK;
+            }
+        }
+
+        if (node.isFunctionNode) {
+            const name = node.fn.name, lname = name.toLowerCase();
+            const tspec = ThermoEngine.FUNCS[lname];
+            if (tspec) {
+                U.checkPropArgs(name, node.args, ctx, node, tspec);
+                if (tspec.kind === 'phys') {
+                    const k0 = node.args[0];
+                    const c = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? IdealGas.constantInfo(k0.value) : null;
+                    return c ? U.mk(U.dimsOfUnit(c.unit)) : U.UNK;
+                }
+                if (tspec.kind === 'props' || tspec.kind === 'props1' || tspec.kind === 'ha') return U.UNK;
+                return U.mk(U.dimsOfUnit(tspec.unit));
+            }
+            const uf = UserFunctions.lookup(name);
+            if (uf) {   // declared argument units are checked; the result has the declared output unit
+                uf.def.params.forEach((p, i) => {
+                    const g = node.args[i] ? U.dimOf(node.args[i], ctx) : U.UNK;
+                    if (p.unit && U.isDim(g) && !U.same(g, U.mk(U.dimsOfUnit(p.unit)))) {
+                        U.report(ctx, `${uf.def.name}() expects [${p.unit}] for ${p.name} but got [${U.nameFor(g.d)}] in '${node.toString()}'`);
+                    }
+                });
+                const o = uf.def.outputs[uf.k];
+                return (o && o.unit) ? U.mk(U.dimsOfUnit(o.unit)) : U.UNK;
+            }
+            const a = node.args.map(x => U.dimOf(x, ctx));
+            const DIMLESS_IN = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
+                'asinh', 'acosh', 'atanh', 'exp', 'expm1', 'log', 'log10', 'log2', 'log1p', 'ln', 'erf'];
+            if (DIMLESS_IN.includes(name)) {
+                a.forEach(x => {
+                    if (U.isDim(x) && !U.isDimless(x)) U.report(ctx, `${name}() needs a dimensionless argument but got [${U.nameFor(x.d)}] in '${node.toString()}'`);
+                });
+                return a.every(x => x.k === 'lit') ? U.LIT : U.mk(U.zero());
+            }
+            if (['abs', 'ceil', 'floor', 'round', 'fix', 'min', 'max', 'hypot', 'mod'].includes(name)) return U.addDims(a, ctx, node);
+            if (name === 'atan2') { U.addDims(a, ctx, node); return a.every(x => x.k === 'lit') ? U.LIT : U.mk(U.zero()); }
+            if (name === 'sqrt') return U.scale(a[0], 0.5);
+            if (name === 'cbrt') return U.scale(a[0], 1 / 3);
+            if (name === 'square') return U.scale(a[0], 2);
+            if (name === 'cube') return U.scale(a[0], 3);
+            if (name === 'sign') return U.mk(U.zero());
+            if (name === 'pow') return U.powDims(a[0], a[1], node.args[1], ctx, node);
+            return U.UNK;
+        }
+        return U.UNK;
+    }
+
+    static run(parsedASTs, variablesMap) {
+        const U = UnitConsistencyChecker;
+        const registered = new Set(variablesMap.keys());
+        const dims = new Map();
+        const issues = new Set();
+
+        // 1. Declared units -> dimensions
+        variablesMap.forEach((meta, name) => {
+            const u = (meta.unit || '').trim();
+            if (!u) return;
+            try { dims.set(name, U.mk(U.dimsOfUnit(u))); }
+            catch (e) { issues.add(`Unit '${u}' of ${name} is not recognized. Use forms like kPa, kJ/(kg K), W/(m^2 K), degC.`); }
+        });
+        const declared = new Set(dims.keys());
+
+        // 2. Infer dimensions of unlabeled variables, repeating until nothing changes (order-independent)
+        const nameOf = (n) => n.isSymbolNode ? n.name : (n.isAccessorNode ? n.toString() : null);
+        for (let pass = 0; pass <= parsedASTs.length; pass++) {
+            let changed = false;
+            const ctx = { registered, dims, report: null };
+            for (const eq of parsedASTs) {
+                const L = U.dimOf(eq.leftAST, ctx), R = U.dimOf(eq.rightAST, ctx);
+                const infer = (node, d) => {
+                    const n = nameOf(node);
+                    if (n && registered.has(n) && !dims.has(n) && U.isDim(d)) { dims.set(n, d); changed = true; }
+                };
+                if (U.isDim(R)) infer(eq.leftAST, R);
+                if (U.isDim(L)) infer(eq.rightAST, L);
+            }
+            if (!changed) break;
+        }
+
+        // 3. Final pass: report every inconsistency once
+        const ctx = { registered, dims, report: (m) => issues.add(m) };
+        for (const eq of parsedASTs) {
+            const L = U.dimOf(eq.leftAST, ctx), R = U.dimOf(eq.rightAST, ctx);
+            if (U.isDim(L) && U.isDim(R) && !U.same(L, R)) {
+                const line = eq.lineRaw || `${eq.leftAST.toString()} = ${eq.rightAST.toString()}`;
+                issues.add(`Unit mismatch in '${line}': left side is [${U.nameFor(L.d)}], right side is [${U.nameFor(R.d)}]`);
+            }
+        }
+
+        // 4. Record inferred units (display only; replaced on every check)
+        variablesMap.forEach((meta, name) => {
+            meta.inferredUnit = (!declared.has(name) && dims.has(name))
+                ? (U.isDimless(dims.get(name)) ? '-' : U.nameFor(dims.get(name).d)) : '';
+        });
+
+        const unlabeled = [...registered].filter(n => !dims.has(n));
+        if (issues.size > 0) {
+            console.error(`Unit check found ${issues.size} problem(s):`);
+            issues.forEach(m => console.error('  ' + m));
+        } else {
+            console.log(`Unit check passed: ${dims.size} of ${registered.size} variables have known dimensions.`);
+        }
+        if (unlabeled.length > 0) {
+            console.log(`  Not checked (no units known): ${unlabeled.slice(0, 12).join(', ')}${unlabeled.length > 12 ? ', ...' : ''}`);
+        }
+        if ([...variablesMap.values()].some(m => /^deg[CF]$/.test((m.unit || '').trim()))) {
+            console.log('  Note: degC/degF are absolute temperatures here (stored in K). Label temperature DIFFERENCES in K.');
+        }
+        return { issues: [...issues], dims };
+    }
+}
+
