@@ -312,6 +312,16 @@ class UnitConsistencyChecker {
                 if (U.isDim(d) && !U.same(d, U.mk(U.dimsOfUnit('m')))) U.report(ctx, `${name}() takes radii (lengths) but got [${U.nameFor(d.d)}] in '${node.toString()}'`);
                 return U.isDim(d) ? d : U.UNK;
             }
+            if (typeof Corr !== 'undefined' && Corr.entries[name] && CORRELATIONS[name].out) {   // boiling, condensation: SI units per argument
+                const c = CORRELATIONS[name];
+                node.args.forEach((x, i) => {
+                    if (x.isConstantNode && typeof x.value === 'string') return;
+                    const g = U.dimOf(x, ctx), u = c.argu[i] || '', want = u ? U.mk(U.dimsOfUnit(u)) : U.mk(U.zero());
+                    if (ctx.infer && g.k === 'unk') U.inferDown(x, want, ctx);
+                    if (U.isDim(g) && !U.same(g, want)) U.report(ctx, `${name}() expects [${u || 'dimensionless'}] for ${(c.argn[i] || '').replace(/[$?]/g, '')} but got [${U.nameFor(g.d)}] in '${node.toString()}'`);
+                });
+                return U.mk(U.dimsOfUnit(c.out));
+            }
             if (typeof Corr !== 'undefined' && Corr.entries[name]) {   // correlations: dimensionless in, dimensionless out
                 node.args.forEach(x => {
                     if (x.isConstantNode && typeof x.value === 'string') return;

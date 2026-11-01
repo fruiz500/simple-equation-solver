@@ -1,0 +1,132 @@
+# Simple Equation Solver
+
+A browser-based solver for systems of algebraic and differential equations, made for courses in thermodynamics and heat transfer. Type the equations in any order, one per line, and press **Solve**. The program works out which equations have to be solved together, solves them, and shows every variable with its unit. It includes fluid properties, ideal-gas data for combustion, solid properties, heat transfer correlations, parametric tables, plots, optimization and ODE integration.
+
+It runs entirely in the browser. There is nothing to install and no server: open `index.html`.
+
+```
+// Cylinder in cross flow of air, properties at the film temperature (Incropera, Example 7.4)
+D = 0.0127 [m]
+V = 10 [m/s]
+T_inf = 26.2 [degC]
+T_s = 128.4 [degC]
+P = 101325 [Pa]
+T_f = (T_inf + T_s)/2
+k = conductivity('air', T_f, P)
+Pr = prandtl('air', T_f, P)
+Re = V*D/kinematicviscosity('air', T_f, P)
+Nu = nu_churchillbernstein(Re, Pr)
+h = Nu*k/D                      // 96.66 W/(m^2 K)
+```
+
+## Features
+
+**Equations**
+- Systems of nonlinear equations in any order. The solver splits them into blocks that must be solved simultaneously and solves each block with a bounded Newton method. You can set a guess, bounds and a display unit for each variable.
+- Equations can be solved backward: any variable can be the unknown, including the argument of a property function, a correlation or a table interpolation.
+- Arrays and matrices, `duplicate` blocks for repeated equations (finite-difference grids, for example), and long lines that continue across open brackets.
+- User functions with several inputs and outputs, `if`/`elseif`, `for` and `while` loops, and `return`/`break`. Functions can be called from equations and solved through.
+- Every [math.js](https://mathjs.org) function is available, plus `if(c, a, b)` and `c ? a : b`.
+
+**Units**
+- Unit tags such as `[kPa]`, `[W/(m^2 K)]` and `[degC]` on values and results. Calculations are done in SI and results are shown in the unit you choose.
+- **Check Units** checks the dimensional consistency of every equation and infers units for untagged variables.
+- New units can be declared, for example `units $, euro`.
+
+**Properties**
+- Real fluids, humid air, incompressible fluids and mixtures, through [CoolProp](http://www.coolprop.org): `enthalpy('water', T, P)`, `quality(...)`, `humidair(...)`, derivatives such as `props('d(T)/d(P)|Hmass', ...)`, and the PR and SRK cubic equations of state.
+- Ideal gases for combustion, from the NASA 7-coefficient polynomials (N2, O2, H2O, CO2, CH4, fuels, radicals): absolute enthalpy, entropy, Gibbs energy and enthalpy of formation.
+- Solids: conductivity, specific heat, density and diffusivity of the metals and nonmetals in Incropera's Tables A.1 to A.3, interpolated in temperature.
+
+**Heat transfer correlations**
+- These are named after the correlation, so the choice is visible in the equations: `nu_gnielinski(Re, Pr)`, `nu_churchillchu_plate(Ra, Pr)`, `f_colebrook(Re, eps_D)` (the Moody chart), `cd_sphere(Re)`, `q_rohsenow(...)`, `h_cond_tube(...)`, and so on.
+- They cover forced convection (internal flow, flat plates, cylinders, spheres, tube banks), free convection (plates, cylinders, spheres, channels, enclosures, concentric cylinders and spheres), boiling (nucleate, critical and minimum heat flux, film boiling, flow boiling) and condensation (film on plates, tubes and spheres, in tubes, dropwise). Heat exchangers (ε–NTU), radiation, fins and transient conduction are in progress.
+- Convection correlations take dimensionless arguments; the boiling and condensation ones take SI quantities, and Check Units checks each argument. A value outside the published range of a correlation is still computed, with a warning.
+
+**Tools**
+- **Parametric tables:** sweep a variable and get every result as a column.
+- **Plots:** overlaid curves, linear or log axes, straight or smooth lines, light and dark color schemes, adjustable text size, and export as PNG or SVG for publication.
+- **Min/Max optimization** of one or more free variables within bounds. It uses BFGS (the default) or Nelder–Mead, with an optional multistart, and Brent's or golden-section search for one variable.
+- **ODE blocks:** initial-value problems solved alongside the algebraic equations. They use adaptive Dormand–Prince 5(4) or, for stiff systems, a linearly implicit extrapolation method. The solver can also solve for an end time that meets a condition.
+- **Tabulated data:** `interpolate()` in 1-D and 2-D, linear, cubic spline or monotone (pchip), forward or backward, with optional extrapolation and a warning.
+- A console command line for quick calculations, including symbolic `derivative()` and `simplify()`.
+- **Save** and **Open** sessions as plain-text `.ses` files (equations plus variable settings), and export results and tables as tab-separated text that opens in Excel.
+
+The full manual, with many worked examples, is in [`help.html`](help.html), which also opens from the **Help** button. Every result shown in the help examples was computed by the program, and the test suite checks them again.
+
+## Getting started
+
+1. Download or clone the repository.
+2. Open `index.html` in a recent version of Chrome, Edge, Firefox or Safari.
+3. Try one of the examples in the help: each has a **Copy** button. Paste it into the Equations pane and press **Solve**.
+
+The page needs an internet connection the first time it loads, because math.js, Plotly and CoolProp come from public CDNs.
+
+You can also serve the folder with GitHub Pages or any static web server. Nothing needs to be built.
+
+## Files
+
+| File | Contents |
+|---|---|
+| `index.html`, `style.css` | The page and its layout |
+| `ui.js` | Editor, panes, tables, plots, dialogs, saving and loading |
+| `parser.js` | Equation parsing, `duplicate` blocks, line continuation, unit declarations |
+| `solver.js` | Block decomposition, Newton solver, optimizers, interpolation |
+| `ode.js` | ODE blocks and integrators |
+| `userfunctions.js` | User-defined functions |
+| `units.js` | Unit conversion and Check Units |
+| `thermo.js` | CoolProp interface and NASA ideal-gas data |
+| `solids.js` | Solid property tables |
+| `correlations.js` | Heat transfer and friction correlations |
+| `help.html` | The manual |
+| `tests/` | Automated tests (see below) |
+
+## Tests
+
+The `tests/` folder checks the program against exact solutions and published results. It contains more than 450 checks, including the textbook's worked examples, CoolProp reference values, convergence orders of the integrators, every help example, and the user interface in a headless browser.
+
+```
+cd tests
+npm install                 # math.js, CoolProp (WASM), Plotly and Playwright, at the versions the app uses
+npx playwright install chromium
+npm test                    # everything (Node, then Chromium)
+npm run test:engine         # the solver only, in Node; no browser needed
+```
+
+Run `node run.mjs --verbose` for details, or `node run.mjs correlations` to run only the files whose names match. See [`tests/README.md`](tests/README.md) for the list of test files.
+
+## Limitations
+
+- Each equation is a single-line expression; sequential code goes in user functions. Derivatives are computed numerically.
+- Optimization supports bounds only, not general inequality constraints, and finds a local optimum (multistart makes finding the global one likely, not certain).
+- Array sizes and `duplicate` ranges must be known before solving.
+- Results are real-valued.
+- Most nonmetallic solids are tabulated at 300 K only.
+- Correlations are typically within 10 to 25 % of experimental data. That is a property of the correlations, not of the program.
+
+## Credits and sources
+
+**Libraries** (loaded from CDNs, not included in this repository):
+- [math.js](https://mathjs.org) 11.8.0, by Jos de Jong and contributors. Apache License 2.0. Expression parsing, units, matrices and symbolic functions.
+- [Plotly.js](https://plotly.com/javascript/) 2.24.1, by Plotly, Inc. MIT License. Plots.
+- [CoolProp](http://www.coolprop.org) 6.6.0, by Ian Bell and contributors, compiled to WebAssembly. MIT License. Fluid and humid-air properties. If you use CoolProp in published work, please cite:
+  I. H. Bell, J. Wronski, S. Quoilin and V. Lemort, "Pure and Pseudo-pure Fluid Thermophysical Property Evaluation and the Open-Source Thermophysical Property Library CoolProp," *Industrial & Engineering Chemistry Research* 53(6), 2498–2508, 2014. [doi:10.1021/ie4033999](https://doi.org/10.1021/ie4033999)
+
+**Data and correlations:**
+- Solid properties and heat transfer correlations are extracted from F. P. Incropera, D. P. DeWitt, T. L. Bergman and A. S. Lavine, *Fundamentals of Heat and Mass Transfer*, 6th ed., John Wiley & Sons, 2007. Equation and table numbers are given for every function in the help. The original sources of the correlations are cited in that book.
+- Ideal-gas properties come from B. J. McBride, S. Gordon and M. A. Reno, *Coefficients for Calculating Thermodynamic and Transport Properties of Individual Species*, NASA TM-4513, 1993. [NASA Technical Reports Server](https://ntrs.nasa.gov/citations/19940013151)
+- The Moody chart friction factor uses C. F. Colebrook, "Turbulent flow in pipes, with particular reference to the transition region between the smooth and rough pipe laws," *Journal of the Institution of Civil Engineers* 11(4), 133–156, 1939.
+- Sphere drag uses R. Clift and W. H. Gauvin, "The motion of particles in turbulent gas streams," *Proc. Chemeca '70*, Vol. 1, 14–28, 1970, as given in R. Clift, J. R. Grace and M. E. Weber, *Bubbles, Drops, and Particles*, Academic Press, 1978.
+
+**Numerical methods:**
+- ODEs: J. R. Dormand and P. J. Prince, "A family of embedded Runge–Kutta formulae," *J. Comput. Appl. Math.* 6(1), 19–26, 1980. Stiff systems use linearly implicit Euler with extrapolation, after E. Hairer and G. Wanner, *Solving Ordinary Differential Equations II*, Springer, 1996.
+- Optimization: BFGS and Nelder–Mead, as described in J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, and in J. A. Nelder and R. Mead, *The Computer Journal* 7(4), 308–313, 1965.
+- Interpolation: monotone piecewise cubic (pchip), after F. N. Fritsch and R. E. Carlson, *SIAM J. Numer. Anal.* 17(2), 238–246, 1980.
+
+## License
+
+Copyright © 2026 Francisco Ruiz.
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License or (at your option) any later version. It is distributed in the hope that it will be useful, but **without any warranty**, without even the implied warranty of merchantability or fitness for a particular purpose. See [`LICENSE`](LICENSE) for the full text, or <https://www.gnu.org/licenses/>.
+
+The libraries above keep their own licenses. The textbook data are short extracts included for teaching and reference.

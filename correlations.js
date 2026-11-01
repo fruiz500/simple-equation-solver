@@ -3,7 +3,8 @@
 // Heat transfer and fluid flow correlations, as given in F. P. Incropera, D. P. DeWitt, T. L. Bergman, A. S. Lavine,
 // Fundamentals of Heat and Mass Transfer, 6th ed., Wiley, 2007 (equation and table numbers below), plus the Colebrook
 // equation (the basis of the Moody chart) and the Clift-Gauvin sphere drag correlation, which the book gives only as graphs.
-// All arguments and results are dimensionless, except lc_cylinders and ls_spheres (lengths, in the units of the radii). Outside a correlation's stated range the value is still computed and
+// Arguments and results are dimensionless, except lc_cylinders and ls_spheres (lengths, in the units of the radii) and the
+// boiling and condensation correlations, whose arguments and results are SI quantities (unit listed with each argument). Outside a correlation's stated range the value is still computed and
 // a warning is shown, for the solution only (the solver may pass outside on the way), as with interpolate().
 
 const CORRELATIONS = (() => {
@@ -15,6 +16,11 @@ const CORRELATIONS = (() => {
                       staggered: [[1, 0.64], [2, 0.76], [3, 0.84], [4, 0.89], [5, 0.92], [7, 0.95], [10, 0.97], [13, 0.98], [16, 0.99], [20, 1]] };
     const MORGAN = [[1e-10, 1e-2, 0.675, 0.058], [1e-2, 1e2, 1.02, 0.148], [1e2, 1e4, 0.850, 0.188], [1e4, 1e7, 0.480, 0.250], [1e7, 1e12, 0.125, 0.333]];   // Table 9.1
     const CHANNEL = { symmetric_t: [576, 2.87, false], symmetric_q: [48, 2.51, true], asymmetric_t: [144, 2.87, false], asymmetric_q: [24, 2.51, true] };   // Table 9.3: C1, C2, isoflux
+    const G0 = 9.80665;   // standard gravity, the default g of the boiling and condensation correlations
+    const CSF = { water_copper_scored: [0.0068, 1.0], water_copper_polished: [0.0128, 1.0], water_steel_etched: [0.0133, 1.0], water_steel_polished: [0.0132, 1.0],   // Table 10.1: C_sf, n
+                  water_steel_ground: [0.0080, 1.0], water_brass: [0.0060, 1.0], water_nickel: [0.006, 1.0], water_platinum: [0.0130, 1.0],
+                  pentane_copper_polished: [0.0154, 1.7], pentane_copper_lapped: [0.0049, 1.7], benzene_chromium: [0.0101, 1.7], ethanol_chromium: [0.0027, 1.7] };
+    const GSF = { kerosene: 0.488, r134a: 1.63, r152a: 1.10, water: 1.00, stainless: 1 };   // Table 10.2
     const DUCT = {   // Table 8.1: b/a, Nu (uniform q''), Nu (uniform Ts), f Re
         rectangle: [[1.0, 3.61, 2.98, 57], [1.43, 3.73, 3.08, 59], [2.0, 4.12, 3.39, 62], [3.0, 4.79, 3.96, 69], [4.0, 5.33, 4.44, 73], [8.0, 6.49, 5.60, 82]],
         circle: [4.36, 3.66, 64], plates: [8.23, 7.54, 96], plates_insulated: [5.39, 4.86, 96], triangle: [3.11, 2.49, 53] };
@@ -219,6 +225,96 @@ const CORRELATIONS = (() => {
             ranges: [], f: (ri, ro) => pow(1 / ri - 1 / ro, 4 / 3) / (pow(2, 1 / 3) * pow(pow(ri, -7 / 5) + pow(ro, -7 / 5), 5 / 3)) },
         keff_k_spheres: { group: 'Free convection: channels and enclosures', args: ['Ra_s', 'Pr'], eq: 'Eq. 9.62', d: 'Effective conductivity ratio k_eff/k between concentric spheres: 0.74 [Pr/(0.861 + Pr)]^(1/4) Ra_s^(1/4), at least 1. Then q = 4 pi k_eff (T_i - T_o)/(1/r_i - 1/r_o) (Eq. 9.61)',
             ranges: [['Ra_s', 0, 1e4], ['Pr', 0.7, 4000]], f: (Ra, Pr) => Math.max(1, 0.74 * pow(Pr / (0.861 + Pr), 1 / 4) * pow(Ra, 1 / 4)) },
+
+        // ---------------- Boiling (Chapter 10). Dimensional: SI arguments and result, as listed in each args entry
+        q_rohsenow: { group: 'Boiling', args: ['DeltaT_e [K]', 'mu_l [Pa s]', 'h_fg [J/kg]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'sigma [N/m]', 'cp_l [J/(kg K)]', 'Pr_l', 'C_sf', 'n', 'g? [m/s^2]'], out: 'W/m^2',
+            eq: 'Eq. 10.5', d: 'Heat flux, nucleate pool boiling (Rohsenow), excess temperature DeltaT_e = T_s - T_sat: mu_l h_fg [g (rho_l - rho_v)/sigma]^(1/2) [cp_l DeltaT_e/(C_sf h_fg Pr_l^n)]^3; C_sf and n from Table 10.1 (csf_rohsenow, n_rohsenow). Properties at T_sat. Clean surfaces; errors up to 100 % in q (about 30 % in DeltaT_e)',
+            rangeText: 'nucleate boiling: q below q_max_zuber', ranges: [],
+            f: (dT, mu, hfg, rl, rv, sg, cp, Pr, Csf, n, g = G0) => mu * hfg * Math.sqrt(g * (rl - rv) / sg) * pow(cp * dT / (Csf * hfg * pow(Pr, n)), 3) },
+        csf_rohsenow: { group: 'Boiling', args: ['surface$'], eq: 'Table 10.1', d: `Coefficient C_sf of the Rohsenow correlation for a surface-fluid combination: ${Object.keys(CSF).map(k => `'${k}'`).join(', ')}`,
+            ranges: [], f: (sf) => CSF[mode(sf, Object.keys(CSF), 'csf_rohsenow')][0] },
+        n_rohsenow: { group: 'Boiling', args: ['surface$'], eq: 'Table 10.1', d: 'Exponent n of the Rohsenow correlation (1.0 for water, 1.7 for the other fluids); combinations as for csf_rohsenow',
+            ranges: [], f: (sf) => CSF[mode(sf, Object.keys(CSF), 'n_rohsenow')][1] },
+        q_max_zuber: { group: 'Boiling', args: ['h_fg [J/kg]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'sigma [N/m]', 'C?', 'g? [m/s^2]'], out: 'W/m^2',
+            eq: 'Eq. 10.6', d: 'Critical (maximum) heat flux, nucleate pool boiling (Kutateladze and Zuber): C h_fg rho_v [sigma g (rho_l - rho_v)/rho_v^2]^(1/4); C = 0.149 (the default) for large horizontal plates, pi/24 = 0.131 for large horizontal cylinders, spheres and large finite surfaces. Properties at T_sat',
+            rangeText: 'heater large compared with the bubbles (Confinement number below about 0.2)', ranges: [],
+            f: (hfg, rl, rv, sg, C = 0.149, g = G0) => C * hfg * rv * pow(sg * g * (rl - rv) / (rv * rv), 1 / 4) },
+        q_min_zuber: { group: 'Boiling', args: ['h_fg [J/kg]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'sigma [N/m]', 'g? [m/s^2]'], out: 'W/m^2',
+            eq: 'Eq. 10.7', d: 'Minimum heat flux (Leidenfrost point), large horizontal plate (Zuber, with C = 0.09 from Berenson): 0.09 rho_v h_fg [g sigma (rho_l - rho_v)/(rho_l + rho_v)^2]^(1/4). Properties at T_sat; about 50 % accuracy at moderate pressures',
+            rangeText: 'moderate pressures', ranges: [],
+            f: (hfg, rl, rv, sg, g = G0) => 0.09 * rv * hfg * pow(g * sg * (rl - rv) / pow(rl + rv, 2), 1 / 4) },
+        h_film_boiling: { group: 'Boiling', args: ['geometry$', 'D [m]', 'DeltaT_e [K]', 'k_v [W/(m K)]', 'rho_v [kg/m^3]', 'mu_v [Pa s]', 'rho_l [kg/m^3]', 'hfg_p [J/kg]', 'g? [m/s^2]'], out: 'W/(m^2 K)',
+            eq: 'Eq. 10.8', d: "Convection coefficient h_conv, film pool boiling on a horizontal cylinder or a sphere of diameter D; geometry 'cylinder' (C = 0.62) or 'sphere' (0.67): (C k_v/D) [g (rho_l - rho_v) hfg_p D^3/(nu_v k_v DeltaT_e)]^(1/4), with hfg_p = hfg_corrected(h_fg, cp_v, DeltaT_e, 'film_boiling'). Vapor properties at the film temperature, rho_l at T_sat. With radiation: h_bromley",
+            rangeText: 'film boiling (beyond the Leidenfrost point)', ranges: [],
+            f: (geo, D, dT, kv, rv, mu, rl, hfgp, g = G0) => { const C = { cylinder: 0.62, sphere: 0.67 }[mode(geo, ['cylinder', 'sphere'], 'h_film_boiling')];
+                return C * kv / D * pow(g * (rl - rv) * hfgp * D * D * D / (mu / rv * kv * dT), 1 / 4); } },
+        h_bromley: { group: 'Boiling', args: ['h_conv [W/(m^2 K)]', 'h_rad [W/(m^2 K)]'], out: 'W/(m^2 K)',
+            eq: 'Eq. 10.9', d: 'Total coefficient in film boiling with radiation (Bromley): the root h of h^(4/3) = h_conv^(4/3) + h_rad h^(1/3), with h_rad = eps sigma (T_s^4 - T_sat^4)/(T_s - T_sat) (Eq. 10.11). For h_rad < h_conv it is close to h_conv + (3/4) h_rad (Eq. 10.10)',
+            ranges: [], f: (hc, hr) => {   // Newton on F(h) = h^(4/3) - hr h^(1/3) - hc^(4/3), increasing for h > hr/4, starting above the root
+                if (hc === 0) return hr;
+                let h = hc + hr;
+                for (let k = 0; k < 50; k++) { const F = pow(h, 4 / 3) - hr * pow(h, 1 / 3) - pow(hc, 4 / 3), dF = 4 / 3 * pow(h, 1 / 3) - hr / 3 * pow(h, -2 / 3), dh = F / dF;
+                    h -= dh; if (Math.abs(dh) < 1e-15 * h) break; }
+                return h;
+            } },
+        q_max_lienhard: { group: 'Boiling', args: ['V [m/s]', 'D [m]', 'h_fg [J/kg]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'sigma [N/m]'], out: 'W/m^2',
+            eq: 'Eqs. 10.12 to 10.14', d: 'Critical heat flux, liquid of velocity V in cross flow over a cylinder (Lienhard and Eichhorn), with We_D = rho_v V^2 D/sigma; low velocity: rho_v h_fg V (1/pi) [1 + (4/We_D)^(1/3)]; high velocity: rho_v h_fg V [(rho_l/rho_v)^(3/4)/(169 pi) + (rho_l/rho_v)^(1/2)/(19.2 pi We_D^(1/3))]; low velocity while the low-velocity value of q_max/(rho_v h_fg V) exceeds (0.275/pi)(rho_l/rho_v)^(1/2) + 1. Properties at T_sat; within 20 % of data',
+            ranges: [], f: (V, D, hfg, rl, rv, sg) => {
+                const We = rv * V * V * D / sg, r = rl / rv, low = (1 + pow(4 / We, 1 / 3)) / Math.PI;
+                const p = low > 0.275 / Math.PI * Math.sqrt(r) + 1 ? low : pow(r, 3 / 4) / (169 * Math.PI) + Math.sqrt(r) / (19.2 * Math.PI * pow(We, 1 / 3));
+                return p * rv * hfg * V;
+            } },
+        h_kandlikar: { group: 'Boiling', args: ['h_sp [W/(m^2 K)]', 'X', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'q_s [W/m^2]', 'G [kg/(s m^2)]', 'h_fg [J/kg]', 'G_sf', 'Fr?'], out: 'W/(m^2 K)',
+            eq: 'Eq. 10.15', d: 'Coefficient h, saturated flow boiling in a smooth circular tube (Kandlikar): the larger of Eqs. 10.15a and 10.15b times h_sp, the single-phase liquid coefficient (nu_gnielinski with properties at T_sat); X = mean vapor mass fraction (quality), G = mass flux, G_sf from Table 10.2 (gsf_kandlikar). Fr = (G/rho_l)^2/(g D) for a horizontal tube (f(Fr) = 2.63 Fr^0.3 below 0.04); omit it for a vertical tube',
+            rangeText: '0 <= X <= 0.8; turbulent liquid flow; Confinement number below 1/2', ranges: [['X', 0, 0.8]],
+            f: (hsp, X, rl, rv, q, G, hfg, Gsf, Fr) => {
+                const fF = Fr !== undefined && Fr < 0.04 ? 2.63 * pow(Fr, 0.3) : 1, r = rl / rv, Bo = pow(q / (G * hfg), 0.7) * pow(1 - X, 0.8) * Gsf;
+                return hsp * Math.max(0.6683 * pow(r, 0.1) * pow(X, 0.16) * pow(1 - X, 0.64) * fF + 1058 * Bo,
+                                      1.136 * pow(r, 0.45) * pow(X, 0.72) * pow(1 - X, 0.08) * fF + 667.2 * Bo);
+            } },
+        gsf_kandlikar: { group: 'Boiling', args: ['fluid$'], eq: 'Table 10.2', d: `Fluid-surface parameter G_sf of the Kandlikar correlation, commercial copper tubing: ${Object.keys(GSF).filter(k => k !== 'stainless').map(k => `'${k}'`).join(', ')}; 'stainless' (any fluid in stainless steel tubing) gives 1`,
+            ranges: [], f: (fl) => GSF[mode(fl, Object.keys(GSF), 'gsf_kandlikar')] },
+        hfg_corrected: { group: 'Boiling', args: ['h_fg [J/kg]', 'cp [J/(kg K)]', 'DeltaT [K]', 'case$'], out: 'J/kg',
+            eq: 'Eqs. 10.27, 10.48, Sec. 10.4.4', d: "Modified latent heat h'_fg; case 'condensation' (film condensation, cp of the liquid, DeltaT = T_sat - T_s): h_fg + 0.68 cp DeltaT; 'chato' (condensation in a horizontal tube): h_fg + (3/8) cp DeltaT; 'film_boiling' (cp of the vapor, DeltaT = T_s - T_sat): h_fg + 0.80 cp DeltaT",
+            ranges: [], f: (hfg, cp, dT, c) => hfg + { condensation: 0.68, chato: 3 / 8, film_boiling: 0.80 }[mode(c, ['condensation', 'chato', 'film_boiling'], 'hfg_corrected')] * cp * dT },
+
+        // ---------------- Condensation (Chapter 10)
+        h_cond_plate: { group: 'Condensation', args: ['L [m]', 'DeltaT [K]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'k_l [W/(m K)]', 'mu_l [Pa s]', 'hfg_p [J/kg]', 'g? [m/s^2]'], out: 'W/(m^2 K)',
+            eq: 'Eq. 10.31', d: "Average coefficient, laminar film condensation on a vertical plate of height L (Nusselt), DeltaT = T_sat - T_s: 0.943 [g rho_l (rho_l - rho_v) k_l^3 hfg_p/(mu_l DeltaT L)]^(1/4), hfg_p = hfg_corrected(h_fg, cp_l, DeltaT, 'condensation'). Liquid properties at the film temperature, rho_v and h_fg at T_sat. Also inclined plates with g cos(theta), and vertical tubes with a thin film. For wavy or turbulent films: h_cond_vert",
+            rangeText: 'wave-free laminar film, Re_delta <= 30', ranges: [],
+            f: (L, dT, rl, rv, k, mu, hfgp, g = G0) => {
+                const h = 0.943 * pow(g * rl * (rl - rv) * k * k * k * hfgp / (mu * dT * L), 1 / 4), Re = 4 * h * L * dT / (mu * hfgp);
+                if (Re > 30) Corr.warn('h_cond_plate', `Re_delta = ${Corr.fmt(Re)} is above 30, the limit of the wave-free laminar film (Eq. 10.38); h_cond_vert covers wavy and turbulent films`);
+                return h;
+            } },
+        h_cond_vert: { group: 'Condensation', args: ['L [m]', 'DeltaT [K]', 'rho_l [kg/m^3]', 'k_l [W/(m K)]', 'mu_l [Pa s]', 'Pr_l', 'hfg_p [J/kg]', 'g? [m/s^2]'], out: 'W/(m^2 K)',
+            eq: 'Eqs. 10.38 to 10.44', d: "Average coefficient, film condensation on a vertical plate of height L, laminar, wavy-laminar or turbulent: Re_delta from Eq. 10.42 (wave-free, up to 30), 10.43 (wavy, up to 1800) or 10.44 (turbulent), whichever falls in its range, then h = Re_delta mu_l hfg_p/(4 L DeltaT) (Eq. 10.41); rho_l >> rho_v. Properties as for h_cond_plate; the film Reynolds number is then 4 h L DeltaT/(mu_l hfg_p)",
+            rangeText: 'all Re_delta (data for water from 1 to 7200)', ranges: [],
+            f: (L, dT, rl, k, mu, Pr, hfgp, g = G0) => {
+                const P = k * L * dT / (mu * hfgp * pow(pow(mu / rl, 2) / g, 1 / 3));
+                let Re = 3.78 * pow(P, 3 / 4);                                                                         // Eq. 10.42
+                if (Re > 30) Re = pow(3.70 * P + 4.8, 0.82);                                                           // Eq. 10.43
+                if (Re > 1800) Re = pow(0.069 * P * Math.sqrt(Pr) - 151 * Math.sqrt(Pr) + 253, 4 / 3);                 // Eq. 10.44
+                return Re * mu * hfgp / (4 * L * dT);
+            } },
+        h_cond_tube: { group: 'Condensation', args: ['D [m]', 'DeltaT [K]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'k_l [W/(m K)]', 'mu_l [Pa s]', 'hfg_p [J/kg]', 'N?', 'g? [m/s^2]'], out: 'W/(m^2 K)',
+            eq: 'Eqs. 10.45, 10.46', d: "Average coefficient, laminar film condensation on the outside of a horizontal tube of diameter D, or the average over a vertical tier of N tubes (default 1): 0.729 [g rho_l (rho_l - rho_v) k_l^3 hfg_p/(N mu_l DeltaT D)]^(1/4), DeltaT = T_sat - T_s, hfg_p = hfg_corrected(h_fg, cp_l, DeltaT, 'condensation'). Properties as for h_cond_plate",
+            rangeText: 'laminar film; reliable for Ja < 0.1', ranges: [],
+            f: (D, dT, rl, rv, k, mu, hfgp, N = 1, g = G0) => 0.729 * pow(g * rl * (rl - rv) * k * k * k * hfgp / (N * mu * dT * D), 1 / 4) },
+        h_cond_sphere: { group: 'Condensation', args: ['D [m]', 'DeltaT [K]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'k_l [W/(m K)]', 'mu_l [Pa s]', 'hfg_p [J/kg]', 'g? [m/s^2]'], out: 'W/(m^2 K)',
+            eq: 'Eq. 10.45', d: 'Average coefficient, laminar film condensation on a sphere of diameter D: 0.826 [g rho_l (rho_l - rho_v) k_l^3 hfg_p/(mu_l DeltaT D)]^(1/4); arguments as for h_cond_tube',
+            rangeText: 'laminar film', ranges: [],
+            f: (D, dT, rl, rv, k, mu, hfgp, g = G0) => 0.826 * pow(g * rl * (rl - rv) * k * k * k * hfgp / (mu * dT * D), 1 / 4) },
+        h_chato: { group: 'Condensation', args: ['D [m]', 'DeltaT [K]', 'rho_l [kg/m^3]', 'rho_v [kg/m^3]', 'k_l [W/(m K)]', 'mu_l [Pa s]', 'hfg_p [J/kg]', 'g? [m/s^2]'], out: 'W/(m^2 K)',
+            eq: 'Eq. 10.47', d: "Average coefficient, condensation inside a horizontal tube of diameter D at low vapor velocity (Chato): 0.555 [g rho_l (rho_l - rho_v) k_l^3 hfg_p/(mu_l DeltaT D)]^(1/4), with hfg_p = hfg_corrected(h_fg, cp_l, DeltaT, 'chato'). Properties as for h_cond_plate",
+            rangeText: 'vapor Reynolds number at the inlet, rho_v u_m,v D/mu_v, below 35000', ranges: [],
+            f: (D, dT, rl, rv, k, mu, hfgp, g = G0) => 0.555 * pow(g * rl * (rl - rv) * k * k * k * hfgp / (mu * dT * D), 1 / 4) },
+        h_dropwise: { group: 'Condensation', args: ['T_sat [K]'], out: 'W/(m^2 K)',
+            eq: 'Eqs. 10.49, 10.50', d: 'Coefficient, dropwise condensation of steam on well-promoted copper surfaces: 51104 + 2044 T_sat (T_sat in degC) up to 100 degC, 255510 above (W/(m^2 K)). Give T_sat as a temperature (in K internally)',
+            rangeText: 'T_sat >= 22 degC', ranges: [],
+            f: (T) => { const t = T - 273.15;
+                if (t < 22) Corr.warn('h_dropwise', `T_sat = ${Corr.fmt(t)} degC is below 22 degC, the limit of its range (Eq. 10.49)`);
+                return t <= 100 ? 51104 + 2044 * t : 255510; } },
     };
 })();
 
@@ -229,20 +325,22 @@ const Corr = {
     entries: {},
     build() {
         for (const [name, c] of Object.entries(CORRELATIONS)) {
-            const req = c.args.filter(a => !a.endsWith('?')).length;
+            c.argn = c.args.map(a => a.replace(/\s*\[.*\]$/, ''));                 // 'mu_l [Pa s]': name 'mu_l', SI unit 'Pa s'
+            c.argu = c.args.map(a => (a.match(/\[(.+)\]$/) || [])[1] || '');
+            const req = c.argn.filter(a => !a.endsWith('?')).length;
             Corr.entries[name] = (...a) => {
                 Interp.used = true;   // so that solve() re-evaluates at the solution and shows the range warnings
-                const sig = `${name}(${c.args.map(x => x.replace(/[$?]$/, '')).join(', ')})`;
-                if (a.length < req || a.length > c.args.length) throw new Error(`${sig} takes ${req === c.args.length ? req : `${req} to ${c.args.length}`} arguments, got ${a.length}`);
+                const sig = `${name}(${c.argn.map(x => x.replace(/[$?]$/, '')).join(', ')})`;
+                if (a.length < req || a.length > c.argn.length) throw new Error(`${sig} takes ${req === c.argn.length ? req : `${req} to ${c.argn.length}`} arguments, got ${a.length}`);
                 a.forEach((v, i) => {
-                    const an = c.args[i];
+                    const an = c.argn[i];
                     if (an.includes('$')) { if (typeof v !== 'string') throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} must be text in quotes`); }
                     else if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} must be a number`);
-                    else if (v < 0 || (v === 0 && /^(Re|Re_x|Re_L|Re_max|Pr|Pr_s|mu_mus|L_D|b_a|Di_Do|f|S_L|H_L|r_i|r_o)\??$/.test(an))) throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} = ${v} must be positive`);
+                    else if (v < 0 || (v === 0 && /^(Re|Re_x|Re_L|Re_max|Pr|Pr_s|mu_mus|L_D|b_a|Di_Do|f|S_L|H_L|r_i|r_o|D|L|mu_l|mu_v|h_fg|hfg_p|rho_l|sigma|k_l|k_v|C_sf|V|G|N|g|C)\??$/.test(an))) throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} = ${v} must be positive`);
                 });
                 if (Interp.notes) {   // ranges, checked at the solution only
                     const val = { Pe: a[0] * a[1], Pe_x: a[0] * a[1], RePr: a[0] * a[1], RaS_L: a[0] * a[1] };
-                    c.args.forEach((an, i) => { val[an.replace(/[$?]/g, '')] = a[i]; });
+                    c.argn.forEach((an, i) => { val[an.replace(/[$?]/g, '')] = a[i]; });
                     for (const [k, lo, hi] of c.ranges) {
                         const v = val[k];
                         if (v === undefined) continue;
