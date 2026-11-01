@@ -201,48 +201,45 @@ z = 0
     </div>
 
     <div id="optimize-modal" class="modal-overlay">
-        <div class="modal-content" style="max-width: 400px;">
+        <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
                 <span>Optimization (Min/Max)</span>
                 <span class="modal-close" id="optimize-close">&times;</span>
             </div>
-            <!-- The modal body contains dropdowns to select the objective (target) and independent (free) variables -->
+            <!-- Direction and target; free variables with their bounds (from the Variables pane, editable here only) -->
             <div class="modal-body"
-                style="display: flex; flex-direction: column; gap: 15px; font-family: sans-serif; font-size: 14px;">
-                <label>
-                    <strong>Direction:</strong><br>
-                    <select id="opt-direction" style="width: 100%; padding: 4px;">
-                        <option value="max">Maximize</option>
-                        <option value="min">Minimize</option>
-                    </select>
-                </label>
-                <label>
-                    <strong>Target Variable (Objective):</strong><br>
-                    <!-- Populated dynamically with all parsed variables -->
-                    <select id="opt-target" style="width: 100%; padding: 4px;"></select>
-                </label>
-                <label>
-                    <strong>Free Variable (Independent):</strong><br>
-                    <!-- The variable we are tweaking to find the min/max -->
-                    <select id="opt-free" style="width: 100%; padding: 4px;"></select>
-                </label>
+                style="display: flex; flex-direction: column; gap: 12px; font-family: sans-serif; font-size: 14px;">
                 <div style="display: flex; gap: 10px;">
                     <label style="flex: 1;">
-                        <strong>Lower Bound:</strong><br>
-                        <input type="number" id="opt-lower" style="width: 100%; padding: 4px;" value="0">
+                        <strong>Direction:</strong><br>
+                        <select id="opt-direction" style="width: 100%; padding: 4px;">
+                            <option value="max">Maximize</option>
+                            <option value="min">Minimize</option>
+                        </select>
                     </label>
-                    <label style="flex: 1;">
-                        <strong>Upper Bound:</strong><br>
-                        <input type="number" id="opt-upper" style="width: 100%; padding: 4px;" value="100">
+                    <label style="flex: 2;">
+                        <strong>Target Variable (Objective):</strong><br>
+                        <!-- Populated dynamically with all parsed variables -->
+                        <select id="opt-target" style="width: 100%; padding: 4px;"></select>
                     </label>
+                </div>
+                <div>
+                    <strong>Free Variables:</strong> <span id="opt-dof" style="font-size: 12px; color: #555;"></span>
+                    <div id="opt-free-list" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; margin-top: 4px;"></div>
+                    <div style="font-size: 12px; color: #555; margin-top: 3px;">Min and Max start from the Variables pane; changes here apply to Min/Max only.</div>
                 </div>
                 <label>
                     <strong>Algorithm:</strong><br>
                     <select id="opt-algo" style="width: 100%; padding: 4px;">
-                        <!-- Brent's method combines parabolic interpolation with golden section fallbacks -->
-                        <option value="brent">Brent's Method (Recommended)</option>
-                        <option value="golden">Golden Section Search</option>
+                        <option value="auto">BFGS quasi-Newton (Brent for one variable)</option>
+                        <option value="nm">Nelder-Mead simplex (no derivatives: for kinks or noise)</option>
+                        <option value="golden">Golden section (one variable)</option>
                     </select>
+                </label>
+                <label style="display: flex; gap: 6px; align-items: flex-start; font-size: 13px;">
+                    <input type="checkbox" id="opt-multistart" style="margin-top: 3px;">
+                    <span><strong>Multistart:</strong> also start from 7 more points spread over the bounds, keep the best, and list
+                        the different optima found (about 8 times slower)</span>
                 </label>
                 <button id="btn-run-optimization" style="margin-top: 10px; background-color: #28a745;">Run
                     Optimization</button>

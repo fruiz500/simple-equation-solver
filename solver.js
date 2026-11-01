@@ -605,3 +605,202 @@ class Optimizer1D {
     }
 }
 
+// ==========================================
+// MULTIVARIABLE MIN/MAX: bounded BFGS (default) or Nelder-Mead simplex, optionally from several starting points.
+// Each evaluation fixes the free variables, solves the whole system and reads the target. The search runs in scaled
+// coordinates u = (x - lower)/(upper - lower), each in [0, 1], so variables of very different sizes are treated alike.
+// ==========================================
+class OptimizerND {
+    constructor(parser, solverClass, text, freeVars, lower, upper, targetVar, isMax) {
+        Object.assign(this, { parser, solverClass, text, freeVars, lower, upper, targetVar, isMax });
+        this.n = freeVars.length;
+        this.nSolves = 0;
+        this.cache = new Map();
+        this.warm = null;                       // state of the last solve: the starting guesses of the next one
+        this.best = null;                       // { f, u, st } best point seen
+        parser.parse(text);
+        this.guess0 = new Map([...parser.variables].map(([k, m]) => [k, m.guess]));   // restored at the end
+    }
+    toX(u) { return u.map((v, k) => this.lower[k] + v * (this.upper[k] - this.lower[k])); }
+    toU(x) { return x.map((v, k) => (v - this.lower[k]) / (this.upper[k] - this.lower[k])); }
+
+    // Solves with the free variables fixed at x, starting from the values in warm (else the user's guesses)
+    solveAt(x, warm) {
+        const P = this.parser;
+        P.parse(this.text);
+        P.variables.forEach((m, k) => {
+            const w = warm && warm[k];
+            m.guess = (typeof w === 'number' && Number.isFinite(w)) ? w : (this.guess0.has(k) ? this.guess0.get(k) : m.guess);
+        });
+        this.freeVars.forEach((v, k) => {
+            P.rawEquations.push({ leftStr: v, rightStr: String(x[k]), lineRaw: `${v} = ${x[k]}` });
+            P.parsedASTs.push({ leftAST: P.flatIndex(math.parse(v)), rightAST: new math.ConstantNode(x[k]), vars: [v] });
+        });
+        this.nSolves++;
+        return new this.solverClass(P.parsedASTs, P.variables, P.odeCalls).solve();
+    }
+
+    // The function minimized: the target (or minus the target, for a maximum); +Infinity where the system does not solve
+    F(u) {
+        const key = u.join(',');
+        if (this.cache.has(key)) return this.cache.get(key);
+        const x = this.toX(u);
+        let val = Infinity;
+        for (const warm of (this.warm ? [this.warm, null] : [null])) {   // a failed warm start is retried from the guesses
+            try {
+                const st = this.solveAt(x, warm), t = st[this.targetVar];
+                if (typeof t === 'number' && Number.isFinite(t)) {
+                    val = this.isMax ? -t : t;
+                    this.warm = st;
+                    if (!this.best || val < this.best.f) this.best = { f: val, u: u.slice(), st };
+                } else this.lastError = `${this.targetVar} is not a number there`;
+                break;
+            } catch (e) { this.lastError = e.message; }
+        }
+        this.cache.set(key, val);
+        return val;
+    }
+
+    // Gradient in u: fourth-order central differences (accurate without a tiny step, which would amplify the noise of
+    // the solves); second order next to a bound, or one-sided where one side does not solve
+    grad(u, f0) {
+        const h = 1e-4, g = [];
+        for (let k = 0; k < this.n; k++) {
+            const at = (d) => { const v = u.slice(); v[k] += d; return this.F(v); };
+            if (u[k] - 2 * h >= 0 && u[k] + 2 * h <= 1) {
+                const f1 = at(h), f_1 = at(-h), f2 = at(2 * h), f_2 = at(-2 * h);
+                if ([f1, f_1, f2, f_2].every(Number.isFinite)) { g.push((8 * (f1 - f_1) - (f2 - f_2)) / (12 * h)); continue; }
+            }
+            if (u[k] - h >= 0 && u[k] + h <= 1) {
+                const fp = at(h), fm = at(-h);
+                if (Number.isFinite(fp) && Number.isFinite(fm)) { g.push((fp - fm) / (2 * h)); continue; }
+            }
+            let gk = null;
+            for (const s of (u[k] <= 0.5 ? [1, -1] : [-1, 1])) {
+                if (u[k] + 2 * s * h < 0 || u[k] + 2 * s * h > 1) continue;
+                const f1 = at(s * h), f2 = at(2 * s * h);
+                if (Number.isFinite(f1) && Number.isFinite(f2)) { gk = s * (-3 * f0 + 4 * f1 - f2) / (2 * h); break; }
+            }
+            if (gk === null) throw new Error(`the equations do not solve near ${this.freeVars[k]} = ${+this.toX(u)[k].toPrecision(7)}${this.lastError ? ' (' + this.lastError + ')' : ''}`);
+            g.push(gk);
+        }
+        return g;
+    }
+
+    // Quasi-Newton (BFGS) with bounds: coordinates held at a bound by the gradient stay fixed; projected backtracking line search
+    bfgs(u0) {
+        const n = this.n, clamp = (u) => u.map(v => Math.min(1, Math.max(0, v)));
+        const dot = (a, b) => a.reduce((s, v, k) => s + v * b[k], 0);
+        let u = clamp(u0), f = this.F(u);
+        if (!Number.isFinite(f)) throw new Error(`the equations do not solve at the starting point${this.lastError ? ' (' + this.lastError + ')' : ''}`);
+        let g = this.grad(u, f), H = null, scaled = false, iter = 0, converged = false, still = 0;
+        const fRef = Math.max(Math.abs(f), 1e-300);
+        for (; iter < 200; iter++) {
+            const free = u.map((v, k) => !((v <= 0 && g[k] > 0) || (v >= 1 && g[k] < 0)));
+            const pg = Math.max(0, ...g.map((gk, k) => free[k] ? Math.abs(gk) : 0));
+            if (pg <= 1e-10 * Math.max(Math.abs(f), fRef)) { converged = true; break; }   // else the line search stops it at the noise level
+            const fresh = !H;
+            if (fresh) { H = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => i === j ? 0.1 / pg : 0)); scaled = false; }
+            let d = u.map((_, i) => free[i] ? -H[i].reduce((s, h, j) => s + (free[j] ? h * g[j] : 0), 0) : 0);
+            if (!(dot(g, d) < 0)) { H = null; if (fresh) break; iter--; continue; }
+            let a = 1, un = null, fn = Infinity, ok = false;
+            for (let ls = 0; ls < 50; ls++) {
+                un = clamp(u.map((v, k) => v + a * d[k]));
+                fn = this.F(un);
+                if (Number.isFinite(fn) && fn <= f + 1e-4 * dot(g, un.map((v, k) => v - u[k]))) { ok = true; break; }
+                a *= 0.5;
+            }
+            if (!ok) {   // no measurable decrease along this direction: at the noise level of the solves, or a stale H
+                if (fresh) { converged = true; break; }
+                H = null; iter--; continue;
+            }
+            const s = un.map((v, k) => v - u[k]), gn = this.grad(un, fn), y = gn.map((v, k) => v - g[k]), sy = dot(s, y);
+            if (sy > 1e-12 * Math.sqrt(dot(s, s) * dot(y, y))) {
+                if (!scaled) { const c = sy / dot(y, y); H = H.map((row, i) => row.map((_, j) => i === j ? c : 0)); scaled = true; }
+                const rho = 1 / sy, Hy = H.map(row => dot(row, y)), yHy = dot(y, Hy);
+                H = H.map((row, i) => row.map((h, j) => h - rho * (Hy[i] * s[j] + s[i] * Hy[j]) + (rho * rho * yHy + rho) * s[i] * s[j]));
+            }
+            const tiny = Math.max(...s.map(Math.abs)) < 1e-9 || Math.abs(f - fn) <= 1e-14 * Math.max(Math.abs(f), 1e-300);
+            u = un; f = fn; g = gn;
+            still = tiny ? still + 1 : 0;
+            if (still >= 2) { converged = true; break; }
+        }
+        return { u, f, iter, converged };
+    }
+
+    // Nelder-Mead simplex (adaptive coefficients for several variables), vertices kept inside the bounds; restarted
+    // from its best point until a restart no longer improves it, which guards against a collapsed simplex
+    nelderMead(u0) {
+        const n = this.n, clamp = (u) => u.map(v => Math.min(1, Math.max(0, v)));
+        const [ar, be, ga, de] = n > 2 ? [1, 1 + 2 / n, 0.75 - 1 / (2 * n), 1 - 1 / n] : [1, 2, 0.5, 0.5];
+        let start = clamp(u0), iter = 0, converged = false, f = this.F(start);
+        if (!Number.isFinite(f)) throw new Error(`the equations do not solve at the starting point${this.lastError ? ' (' + this.lastError + ')' : ''}`);
+        for (let restart = 0, step = 0.1; restart < 4; restart++, step = 0.05) {
+            let S = [start], fs = [f];
+            for (let k = 0; k < n; k++) {
+                const v = start.slice(); v[k] += v[k] + step <= 1 ? step : -step;
+                S.push(v); fs.push(this.F(v));
+            }
+            let done = false;
+            for (let it = 0; it < 300 * n; it++, iter++) {
+                const ord = fs.map((_, i) => i).sort((i, j) => fs[i] - fs[j]);
+                S = ord.map(i => S[i]); fs = ord.map(i => fs[i]);
+                const diam = Math.max(...S.slice(1).map(v => Math.max(...v.map((x, k) => Math.abs(x - S[0][k])))));
+                if (diam <= 1e-9 || (diam <= 1e-7 && Math.abs(fs[n] - fs[0]) <= 1e-15 * Math.max(Math.abs(fs[0]), 1e-300))) { done = true; break; }
+                const c = S[0].map((_, k) => S.slice(0, n).reduce((s, v) => s + v[k], 0) / n);
+                const pt = (t) => clamp(c.map((ck, k) => ck + t * (S[n][k] - ck)));
+                const xr = pt(-ar), fr = this.F(xr);
+                if (fr < fs[0]) {
+                    const xe = pt(-ar * be), fe = this.F(xe);
+                    if (fe < fr) { S[n] = xe; fs[n] = fe; } else { S[n] = xr; fs[n] = fr; }
+                } else if (fr < fs[n - 1]) { S[n] = xr; fs[n] = fr; }
+                else {
+                    const xc = fr < fs[n] ? pt(-ar * ga) : pt(ga), fc = this.F(xc);
+                    if (fc < Math.min(fr, fs[n])) { S[n] = xc; fs[n] = fc; }
+                    else for (let i = 1; i <= n; i++) { S[i] = S[0].map((x, k) => x + de * (S[i][k] - x)); fs[i] = this.F(S[i]); }
+                }
+            }
+            const improved = fs[0] < f - 1e-12 * Math.max(Math.abs(f), 1e-300);
+            start = S[0]; f = fs[0];
+            if (done && !improved && restart > 0) { converged = true; break; }
+            if (!done) break;
+        }
+        return { u: start, f, iter, converged };
+    }
+
+    // Runs the search (method 'bfgs' or 'nm') from x0, or from x0 and 7 more points spread over the bounds (Halton
+    // sequence: the same points every time). Returns the best result, the distinct optima found, and the work done.
+    run(method, x0, multistart) {
+        const halton = (i, b) => { let f = 1, r = 0; for (; i > 0; i = Math.floor(i / b)) { f /= b; r += f * (i % b); } return r; };
+        const P = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
+        const starts = [this.toU(x0)];
+        if (multistart) for (let i = 1; i < 8; i++) starts.push(this.freeVars.map((_, k) => halton(i, P[k % P.length])));
+        const runs = [];
+        for (const u0 of starts) {
+            this.warm = null;
+            try { runs.push((method === 'nm' ? this.nelderMead(u0) : this.bfgs(u0))); }
+            catch (e) { if (!multistart) throw e; runs.push({ failed: e.message }); }
+        }
+        const good = runs.filter(r => !r.failed && Number.isFinite(r.f));
+        if (!good.length) throw new Error(`no starting point could be solved (${runs[0].failed})`);
+        good.sort((a, b) => a.f - b.f);
+        const optima = [];   // distinct end points (more than 0.1 % of the range apart)
+        good.forEach(r => {
+            const o = optima.find(o => Math.max(...o.u.map((v, k) => Math.abs(v - r.u[k]))) < 1e-3);
+            if (o) o.count++; else optima.push({ u: r.u, x: this.toX(r.u), value: this.isMax ? -r.f : r.f, count: 1 });
+        });
+        const b = good[0];
+        return { x: this.toX(b.u), value: this.isMax ? -b.f : b.f, iter: b.iter, converged: b.converged,
+            atBound: this.freeVars.filter((v, k) => b.u[k] <= 1e-9 || b.u[k] >= 1 - 1e-9), optima, starts: starts.length,
+            failedStarts: runs.filter(r => r.failed).length, nSolves: this.nSolves };
+    }
+
+    // Leaves the parser holding the solution at x (for the Variables pane) and restores the user's guesses
+    finish(x) {
+        const key = this.toU(x).join(',');
+        const warm = this.best && this.best.u.join(',') === key ? this.best.st : this.warm;
+        const st = this.solveAt(x, warm);
+        this.parser.variables.forEach((m, k) => { if (this.guess0.has(k)) m.guess = this.guess0.get(k); });
+        return st;
+    }
+}

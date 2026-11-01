@@ -367,8 +367,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         '</tbody></table>';
                 });
                 parametricContainer.innerHTML = html;
-                lastTable = { text: editor.value, tables: OdeBlocks.tables.map(tb => ({ title: `ode block, line ${tb.no}`,
-                    header: tb.cols.map(headerCell), rows: tb.rows.map(r => r.map((v, i) => toDisp(tb.cols[i], v))) })) };
+                lastTable = {
+                    text: editor.value, tables: OdeBlocks.tables.map(tb => ({
+                        title: `ode block, line ${tb.no}`,
+                        header: tb.cols.map(headerCell), rows: tb.rows.map(r => r.map((v, i) => toDisp(tb.cols[i], v)))
+                    }))
+                };
                 const tb = OdeBlocks.tables[0];
                 const plotData = tb.rows.map(r => Object.fromEntries(tb.cols.map((k, i) => [k, toDisp(k, r[i])])));
                 updatePlotControls(plotData, tb.indep, tb.states[0]);
@@ -452,122 +456,125 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- Optimization Dialog UI Logic ---
+    // Free variables are ticked in a list, with Min and Max taken from the Variables pane. Changes made in the dialog
+    // apply to Min/Max only; each is kept for this session while the pane's own value of that bound is unchanged.
     const optModal = document.getElementById('optimize-modal');
-    const btnOptimize = document.getElementById('btn-optimize');
     const optTarget = document.getElementById('opt-target');
-    const optFree = document.getElementById('opt-free');
+    const optFreeList = document.getElementById('opt-free-list');
+    const optEdits = new Map();     // name -> { lo, hi, paneLo, paneHi } (display-unit text)
+    let optTicked = new Set();
+    const escHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
-    // Close modal handler
-    document.getElementById('optimize-close').addEventListener('click', () => {
-        optModal.style.display = 'none';
-    });
+    document.getElementById('optimize-close').addEventListener('click', () => { optModal.style.display = 'none'; });
 
-    // When the "Min/Max" button is clicked, parse equations and populate dropdowns
+    // Active variables and degrees of freedom of the equations as written
+    function activeInfo() {
+        const active = new Set();
+        parser.parsedASTs.forEach(eq => eq.vars.forEach(v => active.add(v)));
+        return { active, dof: active.size - parser.parsedASTs.length };
+    }
+
+    // When the "Min/Max" button is clicked, parse equations and fill the target list and the free-variable table
     document.getElementById('btn-optimize').addEventListener('click', () => {
         try {
             parser.parse(editor.value);
             const vars = displayOrder(Array.from(parser.variables.keys()));
+            if (vars.length === 0) { alert("No variables found. Please enter equations first."); return; }
 
-            if (vars.length === 0) {
-                alert("No variables found. Please enter equations first.");
-                return;
-            }
+            const prevTarget = optTarget.value;
+            optTarget.innerHTML = vars.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+            if (vars.includes(prevTarget)) optTarget.value = prevTarget;
 
-            const targetSelect = document.getElementById('opt-target');
-            const freeSelect = document.getElementById('opt-free');
+            const cell = 'padding: 2px 4px;';
+            optFreeList.innerHTML = '<table style="width: 100%; border-collapse: collapse; font-size: 13px;"><thead><tr style="background: #eee;">' +
+                `<th style="${cell}"></th><th style="${cell} text-align: left;">Variable</th><th style="${cell}">Min</th><th style="${cell}">Max</th></tr></thead><tbody>` +
+                vars.map(v => {
+                    const m = parser.variables.get(v), paneLo = inputNum(toDisp(v, m.lower)), paneHi = inputNum(toDisp(v, m.upper));
+                    const ed = optEdits.get(v), useLo = ed && ed.paneLo === paneLo, useHi = ed && ed.paneHi === paneHi;
+                    return `<tr data-v="${escHtml(v)}" data-pane-lo="${paneLo}" data-pane-hi="${paneHi}">` +
+                        `<td style="${cell}"><input type="checkbox" ${optTicked.has(v) ? 'checked' : ''}></td>` +
+                        `<td style="${cell}">${escHtml(v)}${unitTag(v)}</td>` +
+                        `<td style="${cell}"><input type="number" step="any" class="opt-lo" value="${useLo ? ed.lo : paneLo}" placeholder="-inf" style="width: 90px;"></td>` +
+                        `<td style="${cell}"><input type="number" step="any" class="opt-hi" value="${useHi ? ed.hi : paneHi}" placeholder="inf" style="width: 90px;"></td></tr>`;
+                }).join('') + '</tbody></table>';
 
-            const prevTarget = targetSelect.value, prevFree = freeSelect.value;
-            const options = vars.map(v => `<option value="${v}">${v}</option>`).join('');
-            targetSelect.innerHTML = options;
-            freeSelect.innerHTML = options;
-
-            // Keep the previous choices if those variables still exist; otherwise target = first, free = second
-            if (vars.includes(prevTarget)) targetSelect.value = prevTarget;
-            if (vars.includes(prevFree)) freeSelect.value = prevFree;
-            else if (vars.length > 1) freeSelect.selectedIndex = 1;
-
-            document.getElementById('optimize-modal').style.display = 'flex';
+            const { dof } = activeInfo();
+            document.getElementById('opt-dof').textContent = dof > 0 ? `the equations leave ${dof} degree(s) of freedom: tick ${dof}.`
+                : 'no degree of freedom left: comment out (//) the equations that fix the variables to be optimized.';
+            optModal.style.display = 'flex';
         } catch (err) {
             console.error("Modal initialization error: " + err.message);
         }
     });
+    // Remember ticks and bound edits made in the dialog
+    optFreeList.addEventListener('change', (e) => {
+        const tr = e.target.closest('tr[data-v]'); if (!tr) return;
+        const v = tr.dataset.v;
+        if (e.target.type === 'checkbox') { if (e.target.checked) optTicked.add(v); else optTicked.delete(v); return; }
+        optEdits.set(v, { lo: tr.querySelector('.opt-lo').value, hi: tr.querySelector('.opt-hi').value, paneLo: tr.dataset.paneLo, paneHi: tr.dataset.paneHi });
+    });
 
     // Execute the optimization run
     document.getElementById('btn-run-optimization').addEventListener('click', () => {
-        const optDirection = document.getElementById('opt-direction').value; // 'max' or 'min'
-        const objVar = document.getElementById('opt-target').value;    // Target / Objective
-        const optVar = document.getElementById('opt-free').value;      // Free / Independent
-        const lower = parseFloat(document.getElementById('opt-lower').value);
-        const upper = parseFloat(document.getElementById('opt-upper').value);
-        if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower >= upper) {
-            alert('Enter numeric bounds with lower < upper.'); return;
-        }
-        const algo = document.getElementById('opt-algo').value;      // 'brent' or 'golden'
+        const isMax = document.getElementById('opt-direction').value === 'max';
+        const objVar = optTarget.value;
+        const algo = document.getElementById('opt-algo').value;      // 'auto' (BFGS, Brent for one variable), 'nm' or 'golden'
+        const multi = document.getElementById('opt-multistart').checked;
+        const rows = [...optFreeList.querySelectorAll('tr[data-v]')].filter(tr => tr.querySelector('input[type=checkbox]').checked);
+        const free = rows.map(tr => tr.dataset.v);
+        const lo = rows.map(tr => parseFloat(tr.querySelector('.opt-lo').value)), hi = rows.map(tr => parseFloat(tr.querySelector('.opt-hi').value));
+        const stop = (msg) => { console.error(msg); alert(msg); };
+
+        if (free.length === 0) return stop('Tick the free variable(s) to vary.');
+        if (free.includes(objVar)) return stop(`The target ${objVar} cannot also be a free variable.`);
+        const bad = free.findIndex((v, k) => !(Number.isFinite(lo[k]) && Number.isFinite(hi[k]) && lo[k] < hi[k]));
+        if (bad >= 0) return stop(`Give ${free[bad]} a finite Min below its Max.`);
+        if (algo === 'golden' && (free.length > 1 || multi)) return stop('Golden section works with one free variable and no multistart; choose BFGS or Nelder-Mead.');
 
         try {
-            console.log(`\n--- Executing 1D Optimization (${optDirection.toUpperCase()} ${objVar} w.r.t. ${optVar} using ${algo}) ---`);
             parser.parse(editor.value);
-
-            // Collect active variables referenced across all parsed AST equations
-            const activeVars = new Set();
-            parser.parsedASTs.forEach(eq => eq.vars.forEach(v => activeVars.add(v)));
-
-            if (!activeVars.has(optVar)) {
-                const errorMsg = `Free variable '${optVar}' was not found in the parsed equations.`;
-                console.error(errorMsg);
-                alert(errorMsg);
-                return;
+            const { active, dof } = activeInfo();
+            for (const v of [objVar, ...free]) if (!active.has(v)) return stop(`'${v}' was not found in the equations.`);
+            if (dof < free.length) {
+                return stop(`${free.length} free variable(s) are ticked, but the equations leave ${Math.max(dof, 0)} degree(s) of freedom.\n\n` +
+                    `Comment out (//) the equations that fix ${free.join(', ')}, so that each ticked variable is free.`);
             }
+            if (dof > free.length) return stop(`The equations leave ${dof} degrees of freedom, but ${free.length} variable(s) are ticked: tick ${dof - free.length} more, or add equations.`);
 
-            if (!activeVars.has(objVar)) {
-                const errorMsg = `Target objective variable '${objVar}' was not found in the parsed equations.`;
-                console.error(errorMsg);
-                alert(errorMsg);
-                return;
-            }
+            const loSI = lo.map((v, k) => UnitConv.toSI(v, unitOf(free[k]))), hiSI = hi.map((v, k) => UnitConv.toSI(v, unitOf(free[k])));
+            const show = (v, x) => `${fmtNum(toDisp(v, x))}${unitTag(v)}`;
 
-            const numActiveEqs = parser.parsedASTs.length;
-            const numActiveVars = activeVars.size;
-
-            // --- DEGREE OF FREEDOM CHECK ---
-            // Optimization requires exactly 1 free variable (1 Degree of Freedom)
-            if (numActiveEqs >= numActiveVars) {
-                const errorMsg = `Optimization requires 1 degree of freedom (0 DOF detected).\n\nYou currently have ${numActiveEqs} equation(s) and ${numActiveVars} variable(s).\n\nPlease comment out (//) or remove the equation defining '${optVar}' (e.g., // ${optVar} = ...) to unlock it for optimization.`;
-                console.error(errorMsg);
-                alert(errorMsg);
-                return;
-            } else if ((numActiveVars - numActiveEqs) > 1) {
-                const dof = numActiveVars - numActiveEqs;
-                const errorMsg = `System is under-constrained for 1D optimization (${dof} Degrees of Freedom detected).\n\nPlease add ${dof - 1} more equation(s) so that exactly 1 degree of freedom remains for '${optVar}'.`;
-                console.error(errorMsg);
-                alert(errorMsg);
-                return;
-            }
-
-            const isMax = optDirection === 'max';
-            const fUnit = unitOf(optVar);
-            const lowerSI = UnitConv.toSI(lower, fUnit), upperSI = UnitConv.toSI(upper, fUnit);
-            const optimizer = new Optimizer1D(parser, BoundedSolver);
-
-            let result;
-            if (algo === 'golden') {
-                result = optimizer.goldenSection(optVar, objVar, lowerSI, upperSI, isMax, editor.value);
+            if (free.length === 1 && !multi && algo !== 'nm') {
+                // One variable: Brent's method (or golden section) on the bracket [Min, Max]
+                const optVar = free[0], name = algo === 'golden' ? 'golden section' : "Brent's method";
+                console.log(`\n--- Min/Max: ${isMax ? 'maximize' : 'minimize'} ${objVar} over ${optVar} (${name}) ---`);
+                const optimizer = new Optimizer1D(parser, BoundedSolver);
+                const result = algo === 'golden' ? optimizer.goldenSection(optVar, objVar, loSI[0], hiSI[0], isMax, editor.value)
+                    : optimizer.brentsMethod(optVar, objVar, loSI[0], hiSI[0], isMax, editor.value);
+                optimizer.evaluateObjective(optVar, result.x, objVar, editor.value);   // leaves the final state in the parser
+                console.log(`Optimization Converged in ${result.iter} iterations: Optimal ${optVar} = ${show(optVar, result.x)}, Yielding ${objVar} = ${show(objVar, result.y)}`);
             } else {
-                result = optimizer.brentsMethod(optVar, objVar, lowerSI, upperSI, isMax, editor.value);
+                const method = algo === 'nm' ? 'nm' : 'bfgs';
+                console.log(`\n--- Min/Max: ${isMax ? 'maximize' : 'minimize'} ${objVar} over ${free.join(', ')} (${method === 'nm' ? 'Nelder-Mead' : 'BFGS'}${multi ? ', multistart' : ''}) ---`);
+                const O = new OptimizerND(parser, BoundedSolver, editor.value, free, loSI, hiSI, objVar, isMax);
+                const x0 = free.map((v, k) => { const g = O.guess0.get(v); return (g >= loSI[k] && g <= hiSI[k]) ? g : (loSI[k] + hiSI[k]) / 2; });
+                const r = O.run(method, x0, multi);
+                O.finish(r.x);
+                console.log(`${r.converged ? 'Converged' : 'Stopped'} after ${r.iter} iterations (${r.nSolves} solves): ${objVar} = ${show(objVar, r.value)}`);
+                free.forEach((v, k) => console.log(`  ${v} = ${show(v, r.x[k])}` +
+                    (r.atBound.includes(v) ? (r.x[k] <= loSI[k] ? '   (at its Min)' : '   (at its Max)') : '')));
+                if (!r.converged) console.warn('The convergence test was not met within the iteration limit: these values are the best point found.');
+                if (multi) {
+                    const no = r.optima.length;
+                    const failed = r.failedStarts ? ` (${r.failedStarts} could not be solved)` : '';
+                    console.log(no > 1 ? `Multistart: ${r.starts} starts${failed}, ${no} different optima found:` : `Multistart: ${r.starts} starts${failed}, all ending at this optimum.`);
+                    if (no > 1) r.optima.slice(0, 5).forEach(o => console.log(`  ${objVar} = ${show(objVar, o.value)} at ` +
+                        free.map((v, k) => `${v} = ${show(v, o.x[k])}`).join(', ') + ` (from ${o.count} start${o.count > 1 ? 's' : ''})`));
+                }
             }
-
-            // Re-evaluate objective at the final optimal value to set final state in parser
-            optimizer.evaluateObjective(optVar, result.x, objVar, editor.value);
-
-            console.log(`Optimization Converged in ${result.iter} iterations: Optimal ${optVar} = ${fmtNum(toDisp(optVar, result.x))}${unitTag(optVar)}, Yielding ${objVar} = ${fmtNum(toDisp(objVar, result.y))}${unitTag(objVar)}`);
-
-            // Hide modal after successful run
-            document.getElementById('optimize-modal').style.display = 'none';
-
-            // Refresh UI table
+            optModal.style.display = 'none';
             snapshotResults();
             updateVariablesUI(parser.variables);
-
         } catch (err) {
             console.error("Optimization Error: " + err.message);
         }

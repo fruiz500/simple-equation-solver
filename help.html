@@ -74,7 +74,7 @@ simplify(2*x + 3*x)                     // 5 * x
 5 ft to m                               // 1.524 m (math.js units work here)
 lusolve([4, 1; 1, 3], [1; 2])</code></pre>
 <p><code>derivative</code>, <code>simplify</code> and <code>rationalize</code> take the formula with or without quotes. math.js simplification is limited: it does not, for example, cancel <code>(x^2 - 1)/(x - 1)</code>. The command line does not change the equations or the results.</p>
-<p>The panes are separated by draggable dividers; drag them to resize. A pop-up window (matrix viewer, Min/Max) closes with the × button, by clicking outside it, or with <kbd>Esc</kbd>.</p>
+<p>The panes are separated by draggable dividers; drag them to resize. A pop-up window (matrix viewer, Min/Max, Save image) closes with the × button, by clicking outside it, or with <kbd>Esc</kbd>.</p>
 <h3>Saving your work</h3>
 <p><b>Save...</b> writes one text file, by default with the extension <code>.ses</code> (session). Chrome and Edge show a Save dialog where you type the name; other browsers ask for a file name and put the file in the Downloads folder. The file holds the equations, followed by a closing comment block with the variable settings (Guess, Min, Max, Unit) and, if you pressed Solve and have not edited the equations since, the results. The results are left out when they would be out of date, and the Console says so.</p>
 <p><b>Open...</b> accepts any text file: a <code>.ses</code> file, or a plain list of equations with any extension. The equations go to the Equations pane; if the file has saved settings and results, they are restored in the Variables pane without solving. If you change the equations in a text editor, the settings are still restored but the old results are dropped. Parametric tables and plots are not saved.</p>
@@ -203,11 +203,28 @@ end</code></pre>
 <section id="tools"><h2>Parametric tables, plots, optimization and ODEs</h2>
 <h3>Parametric table</h3>
 <ol><li>Comment out the equation that fixes the variable you want to sweep (so it has one degree of freedom).</li><li>Choose that variable in the <b>Var</b> list, then enter Start, End and Steps.</li><li>Press <b>Run Table</b>. Each row is a full solution; all variables become columns.</li><li>Pick X and Y in Plot Control. The plot updates when you change any of its settings. Tick <b>Overlay</b> to compare several Y variables on one chart, and <b>Clear Plot</b> to start over. Log axes leave out points with values of zero or below, and the Console says how many.</li></ol>
-<h3>Min / Max (single-variable optimization)</h3>
-<p>Set up the equations so that the objective is computed from a free variable, comment out the equation that fixes the free variable, then press <b>Min/Max</b>. Choose Minimize or Maximize, the <b>Target</b> (objective) variable, the <b>Free</b> variable, the lower and upper bound of the search range, and the algorithm (Brent's method, or Golden Section). Example:</p>
+<h3>Min / Max (optimization)</h3>
+<p>Set up the equations so that the objective is computed from one or more free variables, comment out the equations that fix those variables, then press <b>Min/Max</b>. Choose Minimize or Maximize and the <b>Target</b> (objective) variable, then tick the <b>Free Variables</b>: as many as the degrees of freedom the equations leave (the dialog says how many). Each free variable needs a <b>Min</b> and a <b>Max</b>: they start from the Variables pane, and changes made in the dialog apply to Min/Max only (they are remembered until the page is reloaded). Example with one free variable:</p>
 <pre><code>y = z^3 - 12*z + 12
 // z = 0        (commented out, so z is free)</code></pre>
-<p>The function has a local maximum at z = -2 (y = 28) and a local minimum at z = 2 (y = -4). The search finds one optimum inside the range you give, so narrow the range around the one you want (for example 0 to 4 for the minimum).</p>
+<p>The function has a local maximum at z = -2 (y = 28) and a local minimum at z = 2 (y = -4). The search finds one optimum inside the range you give, so narrow the range around the one you want (for example 0 to 4 for the minimum), or tick Multistart.</p>
+<p>Example with two free variables: three-stage compression of air with intercooling to the inlet temperature. The work is least when every stage has the same pressure ratio, here 3: P_2 = 300 and P_3 = 900 kPa.</p>
+<pre><code>// pressures in kPa, written as plain numbers; R = 0.287 kJ/(kg K), inlet temperature 300 K
+P_1 = 100
+P_4 = 2700
+k = 0.4/1.4
+w = 0.287*300*((P_2/P_1)^k + (P_3/P_2)^k + (P_4/P_3)^k - 3)/k
+// Min/Max: minimize w, free variables P_2 and P_3, each from 100 to 2700</code></pre>
+<p>The result is w = 333.36 kJ/kg. Min and Max are in the unit each variable is displayed in (its Unit in the Variables pane); a variable without a unit uses SI, so a pressure tagged nowhere is in Pa.</p>
+<p><b>Algorithms.</b></p>
+<ul>
+<li><b>BFGS quasi-Newton</b> (the default) follows the slope of the target, estimated from extra solves around each point, and learns its curvature as it goes. It is fast and accurate for smooth problems. With one free variable (and no multistart) Brent's method is used instead, as before.</li>
+<li><b>Nelder-Mead simplex</b> compares values only, moving a set of n + 1 points (a triangle for two variables). It is slower and, near a flat optimum, less precise, but it copes with targets that have kinks or noise: if(), interpolate(), ode blocks, or properties near a phase boundary.</li>
+<li><b>Golden section</b>: one free variable only.</li>
+</ul>
+<p>All the free variables move together in each step. Points where the equations cannot be solved count as worse, so the search backs away from them; it must be possible to solve at the starting point, which is each variable's Guess if it lies within its bounds, else the middle of the range. After the run the Console gives the optimum, the number of iterations and solves, and marks a variable that ended <b>at its Min</b> or <b>at its Max</b>: the optimum is then set by that bound. The results go to the Variables pane, as after Solve.</p>
+<p><b>Multistart.</b> BFGS and Nelder-Mead find a <i>local</i> optimum, the best point near where they start. With Multistart ticked, the search also starts from 7 more points spread over the bounds (always the same points), keeps the best result, and lists the different optima found. If all starts end at the same point, that is good evidence the optimum is the global one. It takes about 8 times as long.</p>
+
 <h3>Ordinary differential equations</h3>
 <p>Write an <code>ode</code> block. It can hold one equation or several linked ones:</p>
 <pre><code>ode t = 0 : t_end : 60            // independent variable = start : end : output interval
@@ -1053,7 +1070,7 @@ v_1_exact = 1/density('water', 220 + 273.15, 0.35e6)</code></pre><button class="
 <li>Equations are single-line expressions; sequential code goes in <a href="#functions">user functions</a>. Functions are differentiated numerically, and cannot read the variables of the equations except through their arguments.</li>
 <li>In an ode block each derivative is an explicit expression; a derivative defined implicitly by an equation must be computed in a <a href="#functions">user function</a>. Check Units takes the unit of an ode state from the unit tag of its initial value, but does not check the derivative lines.</li>
 <li>The range of a duplicate block, and indices such as <code>x[N]</code>, must be known before solving; a solved-for variable cannot set the number of nodes.</li>
-<li>Optimization is single-variable and bracketed within the bounds you give.</li>
+<li>Optimization works within the bounds you give (each free variable between its Min and Max); other inequality constraints are not supported. It finds a local optimum; Multistart makes finding the global one likely, not certain.</li>
 <li>String variables are plain text substitutions; they cannot be computed, compared or swept in a parametric table.</li>
 <li>Complex-valued results are not solved for; equations are real-valued.</li>
 <li>The page needs an internet connection for its libraries (math.js, Plotly and CoolProp are loaded from CDNs).</li>
