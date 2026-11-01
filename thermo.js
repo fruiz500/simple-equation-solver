@@ -359,6 +359,7 @@ class ThermoEngine {
         criticaldensity: { key: 'rhocrit', unit: 'kg/m^3', kind: 'const', desc: 'Critical density' },
         triplepointtemperature: { key: 'Ttriple', unit: 'K', kind: 'const', desc: 'Triple-point temperature' },
         triplepointpressure: { key: 'ptriple', unit: 'Pa', kind: 'const', desc: 'Triple-point pressure' },
+        meltingpoint: { key: '', unit: 'K', kind: 'solid', desc: "Melting point of a solid: meltingpoint('copper')" },
         mintemperature: { key: 'Tmin', unit: 'K', kind: 'const', desc: 'Minimum temperature of the equation of state' },
         maxtemperature: { key: 'Tmax', unit: 'K', kind: 'const', desc: 'Maximum temperature of the equation of state' },
         maxpressure: { key: 'pmax', unit: 'Pa', kind: 'const', desc: 'Maximum pressure of the equation of state' },
@@ -419,6 +420,11 @@ class ThermoEngine {
 
     static call(name, a) {
         const spec = ThermoEngine.FUNCS[name];
+        // Solids (solids.js): conductivity('copper', T) and the like, and meltingpoint('copper')
+        if (spec.kind === 'solid' || (spec.kind === 'state' && a.length && Solids.get(a[0]))) {
+            if (!Solids.get(a[0])) throw new Error(`${name}(): '${a[0]}' is not one of the solids (see Solid properties in Help)`);
+            return Solids.call(name, a);
+        }
         if (spec.kind === 'phys') return IdealGas.constant(a);   // these two need no CoolProp
         if (spec.kind === 'ig') return IdealGas.evaluate(name, a);
         const CP = ThermoEngine.CP;

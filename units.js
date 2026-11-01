@@ -131,7 +131,8 @@ class UnitConsistencyChecker {
             }
         };
         if (spec.kind === 'state') {
-            if (rest === 2) expected.push([1, 'K'], [2, 'Pa']);
+            if (rest === 1) expected.push([1, 'K']);                     // a solid: conductivity('copper', T)
+            else if (rest === 2) expected.push([1, 'K'], [2, 'Pa']);
             else if (rest === 4) { keyed(1, 2, U.KEY_DIM); keyed(3, 4, U.KEY_DIM); }
         } else if (spec.kind === 'sat') {
             if (rest === 1 && spec.argUnit) expected.push([1, spec.argUnit]);

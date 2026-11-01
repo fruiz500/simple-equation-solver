@@ -1,7 +1,7 @@
 // Solvers: partitioning, damped Newton / Levenberg-Marquardt, ode45, parametric sweeps, 1-D optimization.
 
 // ==========================================
-// TABULATED DATA: interpolate(xs, ys, x) and interpolate(xs, ys, Z, x, y), Z[i, j] at xs[i], ys[j]: linear (bilinear) by
+// TABULATED DATA (also used by the solid properties, solids.js): interpolate(xs, ys, x) and interpolate(xs, ys, Z, x, y), Z[i, j] at xs[i], ys[j]: linear (bilinear) by
 // default, or cubic with the option 'spline' or 'pchip'. Outside the table it is an error, unless the option 'extrapolate'
 // is given (a straight line continues the end slope).
 // ==========================================
@@ -27,13 +27,18 @@ const Interp = {
         }
         return a;
     },
-    // Index i of the segment xs[i] .. xs[i+1] used for x (the end segment when x is outside the table)
-    find(xs, x, what, extrapolate) {
+    // Index i of the segment xs[i] .. xs[i+1] used for x (the end segment when x is outside the table). label and hint
+    // name the caller in the message (solid properties use them); lastOutside keeps the message of the last range error.
+    lastOutside: '',
+    find(xs, x, what, extrapolate, label = 'interpolate()', hint = " (add 'extrapolate' as the last argument to extend the end segments)") {
         if (typeof x !== 'number' || !Number.isFinite(x)) throw new Error(`interpolate(): ${what} must be a number`);
         const n = xs.length, lo = xs[0], hi = xs[n - 1];
         const F = (v) => (v !== x || (Interp.fmt(x) !== Interp.fmt(lo) && Interp.fmt(x) !== Interp.fmt(hi))) ? Interp.fmt(v) : String(x);   // just past an end: all digits
         if (x < lo || x > hi) {
-            if (!extrapolate && !Interp.lenient) throw new Error(`interpolate(): ${what} = ${F(x)} is outside the table, ${F(lo)} to ${F(hi)} (add 'extrapolate' as the last argument to extend the end segments)`);
+            if (!extrapolate && !Interp.lenient) {
+                Interp.lastOutside = `${label}: ${what} = ${F(x)} is outside the table, ${F(lo)} to ${F(hi)}${hint}`;
+                throw new Error(Interp.lastOutside);
+            }
             const tol = 1e-9 * (hi - lo);
             if (Interp.notes && (x < lo - tol || x > hi + tol)) {
                 Interp.notes.set(`${what} ${x} ${lo} ${hi}`, `interpolate(): extrapolated: ${what} = ${F(x)} is outside the table, ${F(lo)} to ${F(hi)}`);
@@ -90,8 +95,8 @@ const Interp = {
         return s;
     },
     // One-dimensional interpolation of the table xs, ys at x. Outside the table (when allowed): a straight line with the end slope.
-    one(xs, ys, x, method, ext, what) {
-        const i = Interp.find(xs, x, what, ext), n = xs.length;
+    one(xs, ys, x, method, ext, what, label, hint) {
+        const i = Interp.find(xs, x, what, ext, label, hint), n = xs.length;
         if (method === 'linear') { const t = (x - xs[i]) / (xs[i + 1] - xs[i]); return ys[i] + t * (ys[i + 1] - ys[i]); }
         const s = Interp.slopes(xs, ys, method);
         if (x < xs[0]) return ys[0] + s[0] * (x - xs[0]);
@@ -192,14 +197,14 @@ class BoundedSolver {
         Interp.lenient = false;
         if (Interp.used) Interp.collect(() => {
             const sc = this.createScopeWithCoolProp(state);
-            const outside = (e) => /interpolate\(\): \w+ = .* is outside the table/.test(e.message);
+            const outside = (e) => /: \w+ = .* is outside the table/.test(e.message);
             this.parsedASTs.forEach(eq => {
                 try { eq.leftAST.evaluate(sc); eq.rightAST.evaluate(sc); }
                 catch (e) { if (outside(e)) throw new Error(/^ode block/.test(e.message) ? e.message : `Line ${eq.lineNo}: ${e.message}`); }
             });
             OdeBlocks.active.forEach(blk => {
                 try { OdeBlocks.run(blk, blk.inputs.map(nm => state[nm])); }
-                catch (e) { if (outside(e)) throw new Error(`ode block at line ${blk.no}: ` + /interpolate\(\): \w+ = .* is outside the table.*?segments\)/.exec(e.message)[0]); }
+                catch (e) { if (outside(e)) throw new Error(`ode block at line ${blk.no}: ${Interp.lastOutside}`); }
             });
         });
         if (OdeBlocks.active.length > 0) OdeBlocks.record(state); else OdeBlocks.tables = [];
