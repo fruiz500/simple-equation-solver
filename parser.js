@@ -1,3 +1,5 @@
+// Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+// SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // Equation parser: text -> math.js ASTs, variables, units, ode45 calls.
 // ==========================================
 // 3. EES / MATLAB AST PARSER
@@ -23,6 +25,8 @@ class EESParser {
         let cleanText = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*|\{[^}]*\}/g, (c) => c.replace(/[^\n]/g, ' '));
         if (cleanText.includes('/*')) throw new Error("A '/*' comment is never closed with '*/'.");
         const srcLines = cleanText.split('\n');
+        EESParser.joinContinuations(srcLines);                  // a line with an open ( or [ continues on the next lines
+        EESParser.declareUnits(srcLines);                       // units $, euro, person: new unit names
         this.constants = EESParser.constantsOf(srcLines);       // name = number lines, for duplicate ranges and indices
         EESParser.expandDuplicates(srcLines, this.constants);   // writes out the duplicate ... end blocks
         const odeBlocks = OdeBlocks.extract(srcLines);          // lifts out the ode ... end blocks
@@ -59,7 +63,7 @@ class EESParser {
 
             // --- NEW: Extract EES-style inline units (e.g., x = 5 [kJ/kg]) ---
             let inlineUnit = null;
-            const unitMatch = line.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z]|1\/)[a-zA-Z0-9_\/\^\*\s\.\-\(\)]*|-)\]\s*$/);
+            const unitMatch = line.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z$€£¥]|1\/)[a-zA-Z0-9_$€£¥\/\^\*\s\.\-\(\)]*|-)\]\s*$/);
             if (unitMatch) {
                 inlineUnit = unitMatch[1].trim();
                 line = line.slice(0, unitMatch.index + 1).trim();
@@ -97,7 +101,7 @@ class EESParser {
                         try { raw = rightAST.evaluate({}); } catch (e) { }
                         if (typeof raw === 'number' && Number.isFinite(raw)) {
                             if (!UnitConv.isValid(inlineUnit)) {
-                                throw new Error(`Unit '${inlineUnit}' is not recognized by math.js (use e.g. kPa, kJ/(kg K), W/(m^2 K), degC; no hyphens).`);
+                                throw new Error(`Unit '${inlineUnit}' is not recognized by math.js (use e.g. kPa, kJ/(kg K), W/(m^2 K), degC; no hyphens). A new unit, such as $ or euro, must be declared first:  units $, euro`);
                             }
                             rightAST = math.parse(String(UnitConv.toSI(raw, inlineUnit)));
                         }
@@ -134,6 +138,50 @@ class EESParser {
 
     // Lines  name = constant  (a number, or an expression of earlier constants, with an optional unit tag) outside
     // function, ode and duplicate blocks. Their values (SI) are known before solving: duplicate ranges and indices use them.
+    // A line whose ( or [ is still open continues on the next lines, as in
+    //     T_tab = [300, 350, 400,
+    //              450, 500]
+    // The joined text goes on the first line and the others are left empty, so line numbers stay those of the editor.
+    // Quoted text is skipped; ' after a name, ] or ) is a prime (T' or A'), not a quote.
+    static joinContinuations(lines) {
+        const depth = (s) => {
+            let d = 0, q = null;
+            for (let i = 0; i < s.length; i++) {
+                const c = s[i];
+                if (q) { if (c === q) q = null; continue; }
+                if (c === '"' || (c === "'" && !/[A-Za-z0-9_\])]/.test(s[i - 1] || ''))) q = c;
+                else if (c === '(' || c === '[') d++;
+                else if (c === ')' || c === ']') d--;
+            }
+            return d;
+        };
+        const open = (i) => `Line ${i + 1}: a ( or [ is not closed`;
+        for (let i = 0; i < lines.length; i++) {
+            let d = depth(lines[i]), j = i;
+            while (d > 0) {
+                do j++; while (j < lines.length && !lines[j].trim());
+                if (j >= lines.length) throw new Error(open(i));
+                if (EESParser.equalsAt(lines[j]).length) throw new Error(`${open(i)} (line ${j + 1} starts a new equation)`);
+                lines[i] = lines[i].replace(/\s+$/, '') + ' ' + lines[j].trim();
+                d += depth(lines[j]);
+                lines[j] = '';
+            }
+        }
+    }
+
+    // Lines  units $, euro, person  declare new unit names (see UserUnits in units.js); the lines are then left empty
+    static declareUnits(lines) {
+        UserUnits.reset();
+        lines.forEach((l, i) => {
+            const m = l.match(/^\s*units\s+([^=]*)$/);
+            if (!m) return;
+            const names = m[1].split(/[\s,]+/).filter(Boolean);
+            if (!names.length) throw new Error(`Line ${i + 1}: list the new units after 'units', e.g.  units $, euro`);
+            UserUnits.declare(names, `Line ${i + 1}`);
+            lines[i] = '';
+        });
+    }
+
     static constantsOf(lines) {
         const C = {}, cand = [];
         let skip = 0, depth = 0;                                  // inside a block: skip its lines

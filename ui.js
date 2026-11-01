@@ -1,3 +1,5 @@
+// Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+// SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // User interface: console, panes, buttons, plots, files. Runs when the page has loaded.
 document.addEventListener('DOMContentLoaded', () => {
     const consoleOutput = document.getElementById('console-output');
@@ -977,5 +979,5 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     })();
 
-    console.log("SES Engine Initialized (Complete Build with Documentation).");
+    console.log("Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz. Free software under the GNU General Public License v3 or later, with no warranty; see Help, About.");
 });

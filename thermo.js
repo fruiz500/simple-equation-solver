@@ -1,3 +1,5 @@
+// Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+// SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // Property functions: ideal-gas (NASA polynomial) data, physical constants, and the CoolProp front end (ThermoEngine).
 // ==========================================
 // 2b. PHYSICAL CONSTANTS AND IDEAL-GAS (COMBUSTION) DATA

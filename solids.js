@@ -1,7 +1,9 @@
+// Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+// SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // Solid properties: density, specific heat, thermal conductivity, thermal diffusivity and melting point of 198 solids.
-// Data: F. P. Incropera, D. P. DeWitt, T. L. Bergman, A. S. Lavine, Fundamentals of Heat and Mass Transfer, 6th ed.,
-// Wiley, 2007, Appendix A, Tables A.1 (metallic solids), A.2 (nonmetallic solids) and A.3 (common materials), as
-// printed (src gives the table and page). Fields: rho = density (kg/m3, at 300 K unless a note says otherwise),
+// Data extracted from F. P. Incropera, D. P. DeWitt, T. L. Bergman, A. S. Lavine, Fundamentals of Heat and Mass Transfer,
+// 6th ed., Wiley, 2007, Appendix A, Tables A.1 (metallic solids), A.2 (nonmetallic solids) and A.3 (common materials),
+// values as printed (src gives the table and page). Fields: rho = density (kg/m3, at 300 K unless a note says otherwise),
 // Tm = melting point (K), k = [[T (K), W/(m K)], ...], cp = [[T (K), J/(kg K)], ...]. Between tabulated temperatures
 // values are interpolated linearly, as in the textbook; outside the tabulated range it is an error.
 const SOLIDS_DB = {

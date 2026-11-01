@@ -1,3 +1,5 @@
+// Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+// SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // User-defined functions: function ... end blocks, interpreted from math.js ASTs.
 // ==========================================
 // 3b. USER-DEFINED FUNCTIONS (sequential code)
@@ -82,7 +84,7 @@ class UserFunctions {
         const unit = (m[2] || '').trim();
         UserFunctions.checkName(m[1], where);
         if (unit && m[1].endsWith('$')) throw new Error(`${where}: the string argument ${m[1]} cannot have a unit.`);
-        if (unit && !UnitConv.isValid(unit)) throw new Error(`${where}: unit '${unit}' is not recognized by math.js (use e.g. kPa, kJ/(kg K), degC).`);
+        if (unit && !UnitConv.isValid(unit)) throw new Error(`${where}: unit '${unit}' is not recognized by math.js (use e.g. kPa, kJ/(kg K), degC; a new unit such as $ must be declared first:  units $).`);
         return { name: m[1], unit };
     }
 
@@ -94,7 +96,7 @@ class UserFunctions {
         if (!h[1]) throw new Error(`${where}: a function must return something:  function y = ${h[2]}(...)`);
         const name = h[2];
         U.checkName(name, where);
-        if (ThermoEngine.FUNCS[name.toLowerCase()] || math[name] !== undefined || name === 'ln' || name === 'interpolate' || /__\d+$/.test(name)) {
+        if (ThermoEngine.FUNCS[name.toLowerCase()] || math[name] !== undefined || name === 'ln' || name === 'interpolate' || Corr.entries[name] || /__\d+$/.test(name)) {
             throw new Error(`${where}: '${name}' is already a built-in name; pick another function name.`);
         }
         let outs = h[1].trim();
@@ -226,6 +228,7 @@ class UserFunctions {
         Object.keys(ThermoEngine.FUNCS).forEach(p => U.base.set(p, (fluid, ...a) => ThermoEngine.evaluate(p, fluid, ...a)));
         U.base.set('ln', Math.log);
         U.base.set('interpolate', Interp.fn);
+        Object.entries(Corr.entries).forEach(([n, f]) => U.base.set(n, f));
         Object.entries(U.entries).forEach(([n, f]) => U.base.set(n, f));
         Object.entries(strConsts || {}).forEach(([n, v]) => U.base.set(n + '$', v));
     }

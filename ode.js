@@ -1,3 +1,5 @@
+// Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+// SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // Ordinary differential equations: adaptive integrators and 'ode ... end' blocks.
 //
 //   ode t = 0 : t_end : 10          independent variable = start : end : output interval   [, stiff] [, rtol = 1e-9] [, atol = 1e-12]
@@ -237,7 +239,7 @@ class OdeBlocks {
         const parse = (src, ln) => {
             let node, unit = null;
             parse.lastUnit = '';
-            const um = src.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z]|1\/)[a-zA-Z0-9_\/\^\*\s\.\-\(\)]*|-)\]\s*$/);
+            const um = src.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z$€£¥]|1\/)[a-zA-Z0-9_$€£¥\/\^\*\s\.\-\(\)]*|-)\]\s*$/);
             if (um) { unit = um[1].trim(); src = src.slice(0, um.index + 1).trim(); }
             try { node = flat(UserFunctions.lowerIf(math.parse(sub(src, ln)))); } catch (e) { throw new Error(`Line ${ln}: ${e.message}`); }
             if (unit) {

@@ -1,3 +1,5 @@
+// Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+// SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // Solvers: partitioning, damped Newton / Levenberg-Marquardt, ode45, parametric sweeps, 1-D optimization.
 
 // ==========================================
@@ -174,6 +176,7 @@ class BoundedSolver {
 
         scope.ln = Math.log;
         scope.interpolate = Interp.fn;
+        Object.assign(scope, Corr.entries);                     // heat transfer correlations (correlations.js)
         Object.assign(scope, UserFunctions.entries, OdeBlocks.entries);
 
         return scope;
