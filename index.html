@@ -141,6 +141,12 @@ z = 0
             <div style="margin-top: 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px;">
                 <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" id="plot-logx"> log x</label>
                 <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" id="plot-logy"> log y</label>
+                <label>Line:
+                    <select id="plot-line">
+                        <option value="linear">Straight</option>
+                        <option value="spline">Smooth</option>
+                    </select>
+                </label>
                 <label>Colors:
                     <select id="plot-theme">
                         <option value="light">Light</option>

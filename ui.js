@@ -205,8 +205,9 @@ document.addEventListener('DOMContentLoaded', () => {
     window.lastPlotDataset = null;
 
     // Render Plotly line chart
-    // Plot appearance: Light colors (default, for reports) or Dark, text size, log axes. Not remembered between visits.
-    const plotStyle = { theme: 'light', font: 12, logX: false, logY: false };
+    // Plot appearance: Light colors (default, for reports) or Dark, text size, log axes, straight or smooth lines between
+    // the points (a spline drawn through them: only the drawing changes). Not remembered between visits.
+    const plotStyle = { theme: 'light', font: 12, logX: false, logY: false, line: 'linear' };
     const PLOT_THEMES = {
         light: { paper: '#ffffff', plot: '#ffffff', text: '#000000', grid: '#dddddd', zero: '#999999' },
         dark: { paper: '#181825', plot: '#11111b', text: '#cdd6f4', grid: '#313244', zero: '#6c7086' },
@@ -261,7 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             trace.type = 'scatter';
             trace.mode = chartType;
-            trace.line = { width: 2 };
+            trace.line = { width: 2, shape: plotStyle.line };
             trace.marker = { size: 6 };
         }
 
@@ -631,6 +632,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('plot-logx').addEventListener('change', (e) => { plotStyle.logX = e.target.checked; applyPlotStyle(); });
     document.getElementById('plot-logy').addEventListener('change', (e) => { plotStyle.logY = e.target.checked; applyPlotStyle(); });
     document.getElementById('plot-theme').addEventListener('change', (e) => { plotStyle.theme = e.target.value; applyPlotStyle(); });
+    document.getElementById('plot-line').addEventListener('change', (e) => {
+        plotStyle.line = e.target.value;
+        const pc = document.getElementById('plot-container');
+        if (pc.data && pc.data.length) Plotly.restyle(pc, { 'line.shape': plotStyle.line });
+    });
     document.getElementById('plot-font-down').addEventListener('click', () => { plotStyle.font = Math.max(8, plotStyle.font - 2); applyPlotStyle(); });
     document.getElementById('plot-font-up').addEventListener('click', () => { plotStyle.font = Math.min(32, plotStyle.font + 2); applyPlotStyle(); });
 

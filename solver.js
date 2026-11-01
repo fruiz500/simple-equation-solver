@@ -1,8 +1,9 @@
 // Solvers: partitioning, damped Newton / Levenberg-Marquardt, ode45, parametric sweeps, 1-D optimization.
 
 // ==========================================
-// TABULATED DATA: interpolate(xs, ys, x) linear, interpolate(xs, ys, Z, x, y) bilinear, Z[i, j] at xs[i], ys[j].
-// Outside the table it is an error, unless 'extrapolate' is the last argument (the end segments are extended).
+// TABULATED DATA: interpolate(xs, ys, x) and interpolate(xs, ys, Z, x, y), Z[i, j] at xs[i], ys[j]: linear (bilinear) by
+// default, or cubic with the option 'spline' or 'pchip'. Outside the table it is an error, unless the option 'extrapolate'
+// is given (a straight line continues the end slope).
 // ==========================================
 const Interp = {
     used: false,     // set by every call; solve() then checks the solution for values outside the tables
@@ -42,19 +43,75 @@ const Interp = {
         while (b - a > 1) { const m = (a + b) >> 1; if (x < xs[m]) b = m; else a = m; }
         return a;
     },
+    // Slopes at the nodes for 'spline' (cubic, not-a-knot ends, as Matlab's spline) or 'pchip' (shape-preserving cubic,
+    // Fritsch-Carlson, as Matlab's pchip: no overshoot, monotonic data stay monotonic)
+    slopes(xs, ys, method) {
+        const n = xs.length, h = [], d = [];
+        for (let k = 0; k < n - 1; k++) { h.push(xs[k + 1] - xs[k]); d.push((ys[k + 1] - ys[k]) / h[k]); }
+        if (n === 2) return [d[0], d[0]];
+        if (method === 'pchip') {
+            const s = new Array(n).fill(0), sg = Math.sign;
+            for (let k = 1; k < n - 1; k++) {
+                if (d[k - 1] * d[k] <= 0) continue;
+                const w1 = 2 * h[k] + h[k - 1], w2 = h[k] + 2 * h[k - 1];
+                s[k] = (w1 + w2) / (w1 / d[k - 1] + w2 / d[k]);
+            }
+            const end = (h0, h1, d0, d1) => {
+                let e = ((2 * h0 + h1) * d0 - h0 * d1) / (h0 + h1);
+                if (sg(e) !== sg(d0)) e = 0; else if (sg(d0) !== sg(d1) && Math.abs(e) > Math.abs(3 * d0)) e = 3 * d0;
+                return e;
+            };
+            s[0] = end(h[0], h[1], d[0], d[1]);
+            s[n - 1] = end(h[n - 2], h[n - 3], d[n - 2], d[n - 3]);
+            return s;
+        }
+        if (n === 3) {   // the parabola through the three points
+            const c = (d[1] - d[0]) / (xs[2] - xs[0]);
+            return xs.map(x => d[0] + c * (2 * x - xs[0] - xs[1]));
+        }
+        // Tridiagonal system for the slopes: continuous second derivative inside, not-a-knot at both ends
+        const A = [], B = [], C = [], R = [];   // sub-, main and super-diagonal, right side
+        const x20 = xs[2] - xs[0], xn = xs[n - 1] - xs[n - 3];
+        A.push(0); B.push(h[1]); C.push(x20); R.push(((h[0] + 2 * x20) * h[1] * d[0] + h[0] * h[0] * d[1]) / x20);
+        for (let k = 1; k < n - 1; k++) { A.push(h[k]); B.push(2 * (h[k - 1] + h[k])); C.push(h[k - 1]); R.push(3 * (h[k] * d[k - 1] + h[k - 1] * d[k])); }
+        A.push(xn); B.push(h[n - 3]); C.push(0); R.push((h[n - 2] * h[n - 2] * d[n - 3] + (2 * xn + h[n - 2]) * h[n - 3] * d[n - 2]) / xn);
+        // Gaussian elimination keeping the band (rows 0 and n-1 are not diagonally dominant: eliminate them carefully)
+        const M = A.map((_, r) => ({ l: A[r], m: B[r], u: C[r], u2: 0, r: R[r] }));
+        for (let k = 0; k < n - 1; k++) {
+            const p = M[k], q = M[k + 1];
+            if (Math.abs(q.l) > Math.abs(p.m)) {   // partial pivoting: swap rows k and k+1 (fill-in one place to the right)
+                M[k] = { l: 0, m: q.l, u: q.m, u2: q.u, r: q.r }; M[k + 1] = { l: p.m, m: p.u, u: p.u2, u2: 0, r: p.r };
+            }
+            const P = M[k], Q = M[k + 1], f = Q.l / P.m;
+            M[k + 1] = { l: 0, m: Q.m - f * P.u, u: Q.u - f * P.u2, u2: Q.u2, r: Q.r - f * P.r };
+        }
+        const s = new Array(n);
+        for (let k = n - 1; k >= 0; k--) s[k] = (M[k].r - M[k].u * (s[k + 1] || 0) - M[k].u2 * (s[k + 2] || 0)) / M[k].m;
+        return s;
+    },
+    // One-dimensional interpolation of the table xs, ys at x. Outside the table (when allowed): a straight line with the end slope.
+    one(xs, ys, x, method, ext, what) {
+        const i = Interp.find(xs, x, what, ext), n = xs.length;
+        if (method === 'linear') { const t = (x - xs[i]) / (xs[i + 1] - xs[i]); return ys[i] + t * (ys[i + 1] - ys[i]); }
+        const s = Interp.slopes(xs, ys, method);
+        if (x < xs[0]) return ys[0] + s[0] * (x - xs[0]);
+        if (x > xs[n - 1]) return ys[n - 1] + s[n - 1] * (x - xs[n - 1]);
+        const h = xs[i + 1] - xs[i], t = (x - xs[i]) / h, t2 = t * t, t3 = t2 * t;   // cubic Hermite on the segment
+        return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * s[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * s[i + 1];
+    },
     fn(...args) {
         Interp.used = true;
-        let ext = false;
-        if (typeof args[args.length - 1] === 'string') {
-            const o = args.pop();
-            if (o.toLowerCase() !== 'extrapolate') throw new Error(`interpolate(): unknown option '${o}' (the only option is 'extrapolate')`);
-            ext = true;
+        let ext = false, method = 'linear', nOpt = 0;
+        while (typeof args[args.length - 1] === 'string') {   // options: 'linear' (default), 'spline', 'pchip', 'extrapolate'
+            const o = args.pop().toLowerCase(); nOpt++;
+            if (o === 'extrapolate') ext = true;
+            else if (['linear', 'spline', 'pchip'].includes(o)) method = o;
+            else throw new Error(`interpolate(): unknown option '${o}' (options: 'linear', 'spline', 'pchip', 'extrapolate')`);
         }
         if (args.length === 3) {
-            const xs = Interp.axis(args[0], 'xs'), ys = Interp.vec(args[1], 'ys'), x = args[2];
+            const xs = Interp.axis(args[0], 'xs'), ys = Interp.vec(args[1], 'ys');
             if (ys.length !== xs.length) throw new Error(`interpolate(): xs has ${xs.length} values but ys has ${ys.length}`);
-            const i = Interp.find(xs, x, 'x', ext), t = (x - xs[i]) / (xs[i + 1] - xs[i]);
-            return ys[i] + t * (ys[i + 1] - ys[i]);
+            return Interp.one(xs, ys, args[2], method, ext, 'x');
         }
         if (args.length === 5) {
             const xs = Interp.axis(args[0], 'xs'), ys = Interp.axis(args[1], 'ys'), x = args[3], y = args[4];
@@ -62,11 +119,11 @@ const Interp = {
             if (!(Array.isArray(Z) && Z.length === xs.length && Z.every(r => Array.isArray(r) && r.length === ys.length && r.every(z => typeof z === 'number' && Number.isFinite(z))))) {
                 throw new Error(`interpolate(): Z must be a matrix of numbers with ${xs.length} rows (one per xs value) and ${ys.length} columns (one per ys value)`);
             }
-            const i = Interp.find(xs, x, 'x', ext), j = Interp.find(ys, y, 'y', ext);
-            const u = (x - xs[i]) / (xs[i + 1] - xs[i]), v = (y - ys[j]) / (ys[j + 1] - ys[j]);
-            return (1 - u) * (1 - v) * Z[i][j] + u * (1 - v) * Z[i + 1][j] + (1 - u) * v * Z[i][j + 1] + u * v * Z[i + 1][j + 1];
+            Interp.find(xs, x, 'x', ext);   // range check of x first, so its message comes before any about y
+            // along y in every row, then along x through the results (for 'linear', this is bilinear interpolation)
+            return Interp.one(xs, Z.map(row => Interp.one(ys, row, y, method, ext, 'y')), x, method, ext, 'x');
         }
-        throw new Error(`interpolate() is used as interpolate(xs, ys, x) or interpolate(xs, ys, Z, x, y), with 'extrapolate' as an optional last argument; got ${args.length + (ext ? 1 : 0)} arguments`);
+        throw new Error(`interpolate() is used as interpolate(xs, ys, x) or interpolate(xs, ys, Z, x, y), optionally followed by 'spline' or 'pchip' and by 'extrapolate'; got ${args.length + nOpt} arguments`);
     },
     // Runs f strictly (outside the table is an error) while collecting extrapolation notes, then shows each one once
     collect(f) {
@@ -75,6 +132,7 @@ const Interp = {
         finally { const n = [...Interp.notes.values()]; Interp.notes = null; n.forEach(m => console.warn(m)); }
     },
 };
+
 // ==========================================
 // 4. BOUNDED NEWTON-RAPHSON & SOLVER ENGINE
 // ==========================================
