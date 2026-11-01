@@ -36,12 +36,16 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 **Properties**
 - Real fluids, humid air, incompressible fluids and mixtures, through [CoolProp](http://www.coolprop.org): `enthalpy('water', T, P)`, `quality(...)`, `humidair(...)`, derivatives such as `props('d(T)/d(P)|Hmass', ...)`, and the PR and SRK cubic equations of state.
 - Ideal gases for combustion, from the NASA 7-coefficient polynomials (N2, O2, H2O, CO2, CH4, fuels, radicals): absolute enthalpy, entropy, Gibbs energy and enthalpy of formation.
+- Water in every phase, under the name `'water'` or `'ice'`: ice Ih from the IAPWS equation of state for ice, the sublimation and melting curves, and vapor below the triple point, all on the same reference as CoolProp's water, so latent heats of fusion and sublimation come out of the enthalpies.
 - Solids: conductivity, specific heat, density and diffusivity of the metals and nonmetals in Incropera's Tables A.1 to A.3, interpolated in temperature.
 
 **Heat transfer correlations**
 - These are named after the correlation, so the choice is visible in the equations: `nu_gnielinski(Re, Pr)`, `nu_churchillchu_plate(Ra, Pr)`, `f_colebrook(Re, eps_D)` (the Moody chart), `cd_sphere(Re)`, `q_rohsenow(...)`, `h_cond_tube(...)`, and so on.
-- They cover forced convection (internal flow, flat plates, cylinders, spheres, tube banks), free convection (plates, cylinders, spheres, channels, enclosures, concentric cylinders and spheres), boiling (nucleate, critical and minimum heat flux, film boiling, flow boiling) and condensation (film on plates, tubes and spheres, in tubes, dropwise). Heat exchangers (ε–NTU), radiation, fins and transient conduction are in progress.
+- They cover forced convection (internal flow, flat plates, cylinders, spheres, tube banks), free convection (plates, cylinders, spheres, channels, enclosures, concentric cylinders and spheres), boiling (nucleate, critical and minimum heat flux, film boiling, flow boiling) and condensation (film on plates, tubes and spheres, in tubes, dropwise).
+- Fins (efficiencies of the Table 3.5 shapes, including the Bessel-function ones, and the heat rate and temperature of uniform fins), transient conduction (the exact series for plane walls, cylinders and spheres, with computed eigenvalues, the semi-infinite solid, the heat rates of Table 5.2, and multidimensional product solutions), conduction shape factors (Table 4.1) and radiation (the blackbody functions and the view factors of Tables 13.1 and 13.2). Bessel functions and erfc are available directly.
 - Convection correlations take dimensionless arguments; the boiling and condensation ones take SI quantities, and Check Units checks each argument. A value outside the published range of a correlation is still computed, with a warning.
+
+- **Heat exchangers:** the ε–NTU relations of every standard flow arrangement, as lines to paste into the equations (they solve forward and backward), and `eps_regenerator`, a periodic-flow model of rotary and fixed-bed regenerators that solves together with properties evaluated at the unknown outlet temperatures.
 
 **Tools**
 - **Parametric tables:** sweep a variable and get every result as a column.
@@ -114,8 +118,11 @@ Run `node run.mjs --verbose` for details, or `node run.mjs correlations` to run 
 
 **Data and correlations:**
 - Solid properties and heat transfer correlations are extracted from F. P. Incropera, D. P. DeWitt, T. L. Bergman and A. S. Lavine, *Fundamentals of Heat and Mass Transfer*, 6th ed., John Wiley & Sons, 2007. Equation and table numbers are given for every function in the help. The original sources of the correlations are cited in that book.
+- Ice: IAPWS R10-06(2009), *Revised Release on the Equation of State 2006 for H2O Ice Ih*, and IAPWS R14-08(2011), *Revised Release on the Pressure along the Melting and Sublimation Curves of Ordinary Water Substance* ([iapws.org](https://www.iapws.org)); thermal conductivity of ice from N. S. Wolfenbarger, E. Carnahan, J. S. Jordan and M. A. Hesse, "A comprehensive dataset for the thermal conductivity of ice Ih," *Data in Brief* 36, 107079, 2021 ([doi:10.1016/j.dib.2021.107079](https://doi.org/10.1016/j.dib.2021.107079)).
 - Ideal-gas properties come from B. J. McBride, S. Gordon and M. A. Reno, *Coefficients for Calculating Thermodynamic and Transport Properties of Individual Species*, NASA TM-4513, 1993. [NASA Technical Reports Server](https://ntrs.nasa.gov/citations/19940013151)
 - The Moody chart friction factor uses C. F. Colebrook, "Turbulent flow in pipes, with particular reference to the transition region between the smooth and rough pipe laws," *Journal of the Institution of Civil Engineers* 11(4), 133–156, 1939.
+- The regenerator model follows R. K. Shah and D. P. Sekulić, *Fundamentals of Heat Exchanger Design*, Wiley, 2003, Ch. 5; the Kays and London correlation given for comparison is from W. M. Kays and A. L. London, *Compact Heat Exchangers*, 3rd ed., McGraw-Hill, 1984.
+- Bessel function values were checked against M. Abramowitz and I. A. Stegun, *Handbook of Mathematical Functions*, NBS, 1964. Radiation functions use the CODATA 2018 values of h, c and k.
 - Sphere drag uses R. Clift and W. H. Gauvin, "The motion of particles in turbulent gas streams," *Proc. Chemeca '70*, Vol. 1, 14–28, 1970, as given in R. Clift, J. R. Grace and M. E. Weber, *Bubbles, Drops, and Particles*, Academic Press, 1978.
 
 **Numerical methods:**

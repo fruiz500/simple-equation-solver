@@ -178,7 +178,7 @@ const SOLIDS_DB = {
     chicken: { name: "Chicken meat, white (74.4% water content)", src: "Table A.3, p. 939", k: [[198, 1.6], [233, 1.49], [253, 1.35], [263, 1.2], [273, 0.476], [283, 0.48], [293, 0.489]], note: "k changes abruptly between 263 and 273 K (freezing): values between them are interpolated across the change", aliases: ["chicken meat"] },
     glass_plate: { name: "Glass, plate (soda lime)", src: "Table A.3, p. 939", rho: 2500, k: [[300, 1.4]], cp: [[300, 750]], aliases: ["glass", "soda lime glass", "window glass", "plate glass"] },
     pyrex: { name: "Glass, Pyrex", src: "Table A.3, p. 939", rho: 2225, k: [[300, 1.4]], cp: [[300, 835]] },
-    ice: { name: "Ice", src: "Table A.3, p. 940", rho: 920, k: [[253, 2.03], [273, 1.88]], cp: [[253, 1945], [273, 2040]], note: "density given at 273 K" },
+    ice_incropera: { name: "Ice (Incropera Table A.3; 'ice' and 'water' give the IAPWS formulation)", src: "Table A.3, p. 940", rho: 920, k: [[253, 2.03], [273, 1.88]], cp: [[253, 1945], [273, 2040]], note: "density given at 273 K" },
     leather: { name: "Leather (sole)", src: "Table A.3, p. 940", rho: 998, k: [[300, 0.159]] },
     paper: { name: "Paper", src: "Table A.3, p. 940", rho: 930, k: [[300, 0.18]], cp: [[300, 1340]] },
     paraffin: { name: "Paraffin", src: "Table A.3, p. 940", rho: 900, k: [[300, 0.24]], cp: [[300, 2890]] },

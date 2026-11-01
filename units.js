@@ -85,7 +85,7 @@ class UnitConsistencyChecker {
         u: 'J/kg', internalenergy: 'J/kg', q: '', quality: '', x: '', v: 'm^3/kg', specificvolume: 'm^3/kg'
     };
     static HA_DIM = { T: 'K', Tdb: 'K', B: 'K', Twb: 'K', D: 'K', Tdp: 'K', P: 'Pa', R: '', RH: '', W: '', Omega: '' };
-    static NAMED = ['Pa', 'J', 'W', 'N', 'J/kg', 'J/(kg K)', 'W/(m K)', 'W/(m^2 K)', 'W/m^2', 'Pa s',
+    static NAMED = ['Pa', 'J', 'W', 'N', 'J/kg', 'J/(kg K)', 'W/(m K)', 'W/(m^2 K)', 'W/m^2', 'W/m^3', 'Pa s',
         'kg/m^3', 'm^3/kg', 'm/s', 'm^2/s', 'm^2', 'm^3', 'kg/s', 'm^3/s', 'J/K', 'W/K', 'K/W',
         '1/s', 'K', 'm', 'kg', 's', 'A', 'mol', 'J/mol', 'J/(mol K)'];
 
@@ -312,7 +312,7 @@ class UnitConsistencyChecker {
                 if (U.isDim(d) && !U.same(d, U.mk(U.dimsOfUnit('m')))) U.report(ctx, `${name}() takes radii (lengths) but got [${U.nameFor(d.d)}] in '${node.toString()}'`);
                 return U.isDim(d) ? d : U.UNK;
             }
-            if (typeof Corr !== 'undefined' && Corr.entries[name] && CORRELATIONS[name].out) {   // boiling, condensation: SI units per argument
+            if (typeof Corr !== 'undefined' && Corr.entries[name] && CORRELATIONS[name].out !== undefined) {   // boiling, condensation: SI units per argument
                 const c = CORRELATIONS[name];
                 node.args.forEach((x, i) => {
                     if (x.isConstantNode && typeof x.value === 'string') return;
@@ -320,7 +320,7 @@ class UnitConsistencyChecker {
                     if (ctx.infer && g.k === 'unk') U.inferDown(x, want, ctx);
                     if (U.isDim(g) && !U.same(g, want)) U.report(ctx, `${name}() expects [${u || 'dimensionless'}] for ${(c.argn[i] || '').replace(/[$?]/g, '')} but got [${U.nameFor(g.d)}] in '${node.toString()}'`);
                 });
-                return U.mk(U.dimsOfUnit(c.out));
+                return c.out ? U.mk(U.dimsOfUnit(c.out)) : U.mk(U.zero());
             }
             if (typeof Corr !== 'undefined' && Corr.entries[name]) {   // correlations: dimensionless in, dimensionless out
                 node.args.forEach(x => {

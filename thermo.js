@@ -310,6 +310,175 @@ class IdealGas {
 }
 
 // ==========================================
+// 1b. WATER BELOW THE TRIPLE POINT: ICE Ih AND LOW-TEMPERATURE VAPOR
+// ==========================================
+// Ice Ih: IAPWS R10-06(2009), Revised Release on the Equation of State 2006 for H2O Ice Ih (Feistel and Wagner), a Gibbs
+// function g(T, p) valid for 0 <= T <= 273.16 K, 0 < p <= 210 MPa, with the entropy constant consistent with IAPWS-95, so
+// ice shares CoolProp's reference state for water (u = s = 0 for the liquid at the triple point).
+// Sublimation and melting curves: IAPWS R14-08(2011). Thermal conductivity (no IAPWS formulation exists): k = 612/T W/(m K),
+// N. S. Wolfenbarger et al., Data in Brief 36 (2021) 107079 and arXiv:2011.12502, 30 to 273 K.
+// Vapor below the triple point: IAPWS-95 through CoolProp with the gas phase imposed (its plain pressure-temperature input
+// refuses T < 273.16 K).
+const IceIh = (() => {
+    const Tt = 273.16, pt = 611.657, p0 = 101325;
+    const g0 = [-0.632020233335886e6, 0.655022213658955, -0.189369929326131e-7, 0.339746123271053e-14, -0.556464869058991e-21];   // J/kg
+    const s0 = -0.332733756492168e4;                                                                                            // J/(kg K)
+    const t1 = [0.368017112855051e-1, 0.510878114959572e-1], r1 = [0.447050716285388e2, 0.656876847463481e2];                      // r in J/(kg K)
+    const t2 = [0.337315741065416, 0.335449415919309];
+    const r2k = [[-0.725974574329220e2, -0.781008427112870e2], [-0.557107698030123e-4, 0.464578634580806e-4], [0.234801409215913e-10, -0.285651142904972e-10]];
+    // complex helpers on [re, im]
+    const add = (a, b) => [a[0] + b[0], a[1] + b[1]], sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
+    const mul = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]], sc = (a, k) => [a[0] * k, a[1] * k];
+    const div = (a, b) => { const d = b[0] * b[0] + b[1] * b[1]; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; };
+    const ln = (a) => [Math.log(Math.hypot(a[0], a[1])), Math.atan2(a[1], a[0])];
+    const R = (t, tau) => {   // the bracket of the Gibbs function and its first two tau derivatives, for one complex t
+        const tm = sub(t, [tau, 0]), tp = add(t, [tau, 0]);
+        const f = sub(add(add(mul(tm, ln(tm)), mul(tp, ln(tp))), sc(mul(t, ln(t)), -2)), div([tau * tau, 0], t));
+        const ft = add(sub(ln(tp), ln(tm)), div([-2 * tau, 0], t));
+        const ftt = sub(add(div([1, 0], tm), div([1, 0], tp)), div([2, 0], t));
+        return [f, ft, ftt];
+    };
+    const gibbs = (T, p) => {
+        const tau = T / Tt, d = (p - p0) / pt;
+        let G0 = 0, G0p = 0, G0pp = 0;
+        for (let k = 0; k < 5; k++) G0 += g0[k] * d ** k;
+        for (let k = 1; k < 5; k++) G0p += g0[k] * k * d ** (k - 1) / pt;
+        for (let k = 2; k < 5; k++) G0pp += g0[k] * k * (k - 1) * d ** (k - 2) / pt ** 2;
+        let r2 = [0, 0], r2p = [0, 0];
+        for (let k = 0; k < 3; k++) r2 = add(r2, sc(r2k[k], d ** k));
+        for (let k = 1; k < 3; k++) r2p = add(r2p, sc(r2k[k], k * d ** (k - 1) / pt));
+        const r2pp = sc(r2k[2], 2 / pt ** 2);
+        const [f1, f1t, f1tt] = R(t1, tau), [f2, f2t, f2tt] = R(t2, tau);
+        return {
+            g: G0 - s0 * Tt * tau + Tt * (mul(r1, f1)[0] + mul(r2, f2)[0]),
+            gT: -s0 + mul(r1, f1t)[0] + mul(r2, f2t)[0],
+            gTT: (mul(r1, f1tt)[0] + mul(r2, f2tt)[0]) / Tt,
+            gp: G0p + Tt * mul(r2p, f2)[0],
+            gTp: mul(r2p, f2t)[0],
+            gpp: G0pp + Tt * mul(r2pp, f2)[0],
+        };
+    };
+    const M = 0.018015268;
+    const props = (T, p) => {
+        const G = gibbs(T, p), v = G.gp, cp = -T * G.gTT, alpha = G.gTp / G.gp, kT = -G.gpp / G.gp, k = 612 / T;
+        return { T, P: p, Q: -1, G: G.g, S: -G.gT, H: G.g - T * G.gT, U: G.g - T * G.gT - p * G.gp, Helmholtzmass: G.g - p * G.gp, D: 1 / v, V_SPEC: v,
+            Cpmass: cp, Cvmass: cp - T * v * alpha * alpha / kT, isobaric_expansion_coefficient: alpha, isothermal_compressibility: kT, L: k, ALPHA: k * G.gp / cp, Phase: 9,
+            Hmolar: (G.g - T * G.gT) * M, Smolar: -G.gT * M, Umolar: (G.g - T * G.gT - p * G.gp) * M, Gmolar: G.g * M, Cpmolar: cp * M, Cvmolar: (cp - T * v * alpha * alpha / kT) * M, Dmolar: 1 / (v * M) };
+    };
+    // Sublimation and melting (ice Ih) pressures, R14-08(2011), and their inverses
+    const psub = (T) => { const th = T / Tt; return pt * Math.exp((-0.212144006e2 * th ** 0.333333333e-2 + 0.273203819e2 * th ** 1.20666667 - 0.61059813e1 * th ** 1.70333333) / th); };
+    const pmelt = (T) => { const th = T / Tt; return pt * (1 + 0.119539337e7 * (1 - th ** 3) + 0.808183159e5 * (1 - th ** 25.75) + 0.33382686e4 * (1 - th ** 103.75)); };
+    const bisect = (f, lo, hi) => { for (let k = 0; k < 200; k++) { const m = (lo + hi) / 2; if (f(m) > 0) hi = m; else lo = m; if (hi - lo < 1e-14 * hi) break; } return (lo + hi) / 2; };
+    const Tsub = (p) => bisect((T) => psub(T) - p, 50, Tt);          // psub increases with T
+    const Tmelt = (p) => bisect((T) => p - pmelt(T), 251.165, Tt);     // pmelt decreases with T
+    return { Tt, pt, M, gibbs, props, psub, pmelt, Tsub, Tmelt, pIII: 208.566e6, TIII: 251.165 };
+})();
+
+const WaterBelowTriple = {
+    names: new Set(['water', 'h2o', 'heos::water', 'ice', 'steam']),
+    is(fluid) { return WaterBelowTriple.names.has(String(fluid).trim().toLowerCase()); },
+    // A fluid state below the triple-point temperature (vapor at low pressure, or liquid on the melting curve), by IAPWS-95
+    // through CoolProp with the phase imposed ('T|gas' or 'T|liquid'), which lifts its T >= 273.16 K limit
+    fluid(CP, T, p, liquid) {
+        const tk = liquid ? 'T|liquid' : 'T|gas';
+        const raw = (key) => { const v = CP.PropsSI(key, tk, T, 'P', p, 'Water'); if (!Number.isFinite(v)) ThermoEngine.fail(CP, `${key} of water at T = ${T} K, p = ${p} Pa`); return v; };
+        const get = (key) => {
+            if (key === 'T') return T; if (key === 'P') return p; if (key === 'Q') return -1;
+            if (key === 'V_SPEC') return 1 / raw('D');
+            if (key === 'ALPHA') return raw('L') / (raw('D') * raw('Cpmass'));
+            if (key === 'NU') return raw('V') / raw('D');
+            if (key === 'Phase') return liquid ? 0 : 5;
+            return raw(key);
+        };
+        return { get, phase: liquid ? 'liquid' : 'vapor' };
+    },
+    ice(T, p) {
+        if (T > IceIh.Tt + 1e-9) throw new Error(`ice at T = ${T} K: above the triple point (273.16 K) ice Ih is not stable`);
+        const st = IceIh.props(T, p);
+        const get = (key) => {
+            if (key in st) return st[key];
+            const what = { V: 'viscosity', Prandtl: 'Prandtl number', NU: 'kinematic viscosity', A: 'speed of sound', I: 'surface tension' }[key] || `'${key}'`;
+            throw new Error(`${what} is not defined for ice (water at T = ${+T.toPrecision(6)} K, p = ${+p.toPrecision(6)} Pa is solid)`);
+        };
+        return { get, phase: 'ice' };
+    },
+    // Which phase is stable at (T, p) below the triple-point temperature: 'vapor', 'ice' or 'liquid'
+    region(T, p) {
+        if (T >= IceIh.Tt) return null;
+        if (T < 50) throw new Error(`water at T = ${T} K: the sublimation curve of ice is defined from 50 K`);
+        if (p < IceIh.psub(T)) return 'vapor';
+        if (T < IceIh.TIII) { if (p > IceIh.pIII) throw new Error(`water at T = ${T} K, p = ${p} Pa: ice III or a denser ice is stable there; only ice Ih is available`); return 'ice'; }
+        return p <= IceIh.pmelt(T) ? 'ice' : 'liquid';
+    },
+    stateTP(CP, T, p) {
+        const r = WaterBelowTriple.region(T, p);
+        if (r === null) return null;
+        if (r === 'ice') return WaterBelowTriple.ice(T, p);
+        if (r === 'liquid') return null;   // CoolProp handles the liquid above the melting curve
+        return WaterBelowTriple.fluid(CP, T, p, false);
+    },
+    // Dispatch on the input pair; null means "an ordinary fluid state: let CoolProp do it"
+    state(CP, k1, v1, k2, v2) {
+        const pair = {}; pair[k1] = v1; pair[k2] = v2;
+        if ('T' in pair && 'P' in pair) return WaterBelowTriple.stateTP(CP, pair.T, pair.P);
+        if ('Q' in pair && ('T' in pair || 'P' in pair)) {
+            if ('T' in pair && pair.T < IceIh.Tt) return WaterBelowTriple.stateSub(CP, pair.T, IceIh.psub(pair.T), pair.Q);
+            if ('P' in pair && pair.P < IceIh.pt) return WaterBelowTriple.stateSub(CP, IceIh.Tsub(pair.P), pair.P, pair.Q);
+            return null;
+        }
+        if ('P' in pair && ('H' in pair || 'S' in pair)) return WaterBelowTriple.stateP(CP, pair.P, 'H' in pair ? 'H' : 'S', 'H' in pair ? pair.H : pair.S);
+        return null;
+    },
+    outKey(o) {   // CoolProp output names accepted by props() for ice, to the keys used here
+        const l = o.toLowerCase();
+        const m = { h: 'H', hmass: 'H', s: 'S', smass: 'S', u: 'U', umass: 'U', g: 'G', gmass: 'G', d: 'D', dmass: 'D', t: 'T', p: 'P', q: 'Q', c: 'Cpmass', cpmass: 'Cpmass', o: 'Cvmass', cvmass: 'Cvmass',
+            l: 'L', conductivity: 'L', helmholtzmass: 'Helmholtzmass', hmolar: 'Hmolar', smolar: 'Smolar', umolar: 'Umolar', gmolar: 'Gmolar', cpmolar: 'Cpmolar', cvmolar: 'Cvmolar', dmolar: 'Dmolar',
+            isobaric_expansion_coefficient: 'isobaric_expansion_coefficient', isothermal_compressibility: 'isothermal_compressibility', phase: 'Phase' };
+        return m[l] || o;
+    },
+    // Sublimation equilibrium: Q = 0 ice, Q = 1 vapor, in between a mixture (extensive properties only)
+    stateSub(CP, T, p, Q) {
+        if (!(Q >= 0 && Q <= 1)) throw new Error(`quality ${Q} must be between 0 and 1`);
+        const s = WaterBelowTriple.ice(T, p), v = WaterBelowTriple.fluid(CP, T, p, false);
+        if (Q === 0) return { get: (k) => k === 'Q' ? 0 : s.get(k), phase: 'ice' };
+        if (Q === 1) return { get: (k) => k === 'Q' ? 1 : v.get(k), phase: 'vapor' };
+        return WaterBelowTriple.mix(s, v, Q, T, p);
+    },
+    mix(a, b, Q, T, p) {   // a two-phase mixture, quality Q of phase b by mass
+        const lin = (k) => (1 - Q) * a.get(k) + Q * b.get(k);
+        const get = (k) => {
+            if (k === 'Q') return Q; if (k === 'T') return T; if (k === 'P') return p;
+            if (['H', 'S', 'U', 'G', 'Helmholtzmass', 'V_SPEC'].includes(k)) return lin(k);
+            if (['Hmolar', 'Smolar', 'Umolar', 'Gmolar'].includes(k)) return lin(k);
+            if (k === 'D') return 1 / lin('V_SPEC');
+            if (k === 'Dmolar') return 1 / lin('V_SPEC') / IceIh.M;
+            if (k === 'Phase') return 6;
+            throw new Error(`'${k}' is not defined for a two-phase mixture (quality ${Q})`);
+        };
+        return { get, phase: 'mixture' };
+    },
+    // (p, h) or (p, s) below the triple point, or in the ice region above it: ice, a mixture on the phase boundary, or fluid
+    stateP(CP, p, key, y) {
+        if (p > IceIh.pIII) return null;
+        const below = p < IceIh.pt;
+        const Tb = below ? IceIh.Tsub(p) : IceIh.Tmelt(p);
+        const sb = WaterBelowTriple.ice(Tb, p), fb = WaterBelowTriple.fluid(CP, Tb, p, !below);
+        const ys = sb.get(key), yf = fb.get(key);
+        if (y >= yf) return below ? WaterBelowTriple.solveT(CP, p, key, y, Tb, 'vapor') : null;   // fluid side: CoolProp above the triple point
+        if (y > ys) { const Q = (y - ys) / (yf - ys); return WaterBelowTriple.mix(sb, fb, Q, Tb, p); }
+        return WaterBelowTriple.solveT(CP, p, key, y, Tb, 'ice');
+    },
+    solveT(CP, p, key, y, Tb, phase) {   // the temperature at which the ice (or low-pressure vapor) property equals y
+        const at = (T) => phase === 'ice' ? WaterBelowTriple.ice(T, p) : WaterBelowTriple.fluid(CP, T, p, false);
+        let lo = phase === 'ice' ? 1 : Tb, hi = phase === 'ice' ? Tb : IceIh.Tt;
+        if (phase === 'vapor' && at(hi).get(key) < y) return null;   // the vapor is above 273.16 K: CoolProp handles it
+        if (phase === 'ice' && at(lo).get(key) > y) throw new Error(`no ice state at p = ${p} Pa has ${key === 'H' ? 'h' : 's'} = ${y}`);
+        for (let k = 0; k < 100 && hi - lo > 1e-12 * hi; k++) { const m = (lo + hi) / 2; if (at(m).get(key) < y) lo = m; else hi = m; }
+        return at((lo + hi) / 2);
+    },
+};
+
+// ==========================================
 // 2. THERMODYNAMIC PROPERTY ENGINE (COOLPROP)
 // ==========================================
 // One table drives everything: the functions available in equations, their SI result units (for the unit checker),
@@ -355,6 +524,8 @@ class ThermoEngine {
         saturationpressure: { key: 'P', unit: 'Pa', kind: 'sat', argKey: 'T', argUnit: 'K', desc: 'Saturation pressure at a temperature: saturationpressure(fluid, T)' },
         enthalpyvaporization: { key: 'H_VAP', unit: 'J/kg', kind: 'sat', desc: "Latent heat h_fg: enthalpyvaporization(fluid, 'T', T) or (fluid, 'P', P)" },
         surfacetension: { key: 'I', unit: 'N/m', kind: 'sat', argKey: 'T', argUnit: 'K', desc: 'Surface tension of the saturated liquid: surfacetension(fluid, T)' },
+        meltingtemperature: { key: 'T', unit: 'K', kind: 'sat', argKey: 'P', argUnit: 'Pa', desc: "Melting temperature of ice Ih at a pressure (water only, IAPWS): meltingtemperature('water', P), from 611.657 Pa to 208.566 MPa" },
+        meltingpressure: { key: 'P', unit: 'Pa', kind: 'sat', argKey: 'T', argUnit: 'K', desc: "Melting pressure of ice Ih at a temperature (water only, IAPWS): meltingpressure('water', T), from 251.165 to 273.16 K" },
         // --- fluid constants: name(fluid) ---
         criticaltemperature: { key: 'Tcrit', unit: 'K', kind: 'const', desc: 'Critical temperature' },
         criticalpressure: { key: 'pcrit', unit: 'Pa', kind: 'const', desc: 'Critical pressure' },
@@ -423,6 +594,7 @@ class ThermoEngine {
     static call(name, a) {
         const spec = ThermoEngine.FUNCS[name];
         // Solids (solids.js): conductivity('copper', T) and the like, and meltingpoint('copper')
+        if (spec.kind === 'solid' && a.length === 1 && WaterBelowTriple.is(a[0])) return IceIh.Tmelt(101325);   // meltingpoint('ice'): at 1 atm
         if (spec.kind === 'solid' || (spec.kind === 'state' && a.length && Solids.get(a[0]))) {
             if (!Solids.get(a[0])) throw new Error(`${name}(): '${a[0]}' is not one of the solids (see Solid properties in Help)`);
             return Solids.call(name, a);
@@ -445,23 +617,46 @@ class ThermoEngine {
         if (spec.kind === 'props') {
             need(a.length === 6, "use props('output', fluid, 'key1', v1, 'key2', v2)");
             const [k1, v1, k2, v2] = ThermoEngine.inputs(name, a.slice(2));
+            if (WaterBelowTriple.is(a[1])) {
+                const st = WaterBelowTriple.state(CP, k1, v1, k2, v2);
+                if (st) return st.get(WaterBelowTriple.outKey(String(a[0])));
+                return check(CP.PropsSI(String(a[0]), k1, v1, k2, v2, 'Water'), `props '${a[0]}' of water`);
+            }
             return check(CP.PropsSI(String(a[0]), k1, v1, k2, v2, String(a[1]).trim()), `props '${a[0]}' of '${a[1]}'`);
         }
 
         need(a.length >= 1, 'the first argument must be the fluid name');
-        const fluid = String(a[0]).trim(), rest = a.slice(1);
+        let fluid = String(a[0]).trim(), rest = a.slice(1);
+        const water = WaterBelowTriple.is(fluid);
+        if (water) {
+            fluid = 'Water';                                                     // 'ice' is water: all phases
+            if (String(a[0]).trim().toLowerCase() === 'ice' && rest.length === 1 && spec.kind === 'state') rest = [rest[0], 101325];   // conductivity('ice', T): 1 atm
+        }
 
         if (spec.kind === 'const') {
             need(rest.length === 0, 'takes only the fluid name');
             return check(CP.Props1SI(spec.key, fluid), `${name} of '${fluid}'`);
         }
 
+        if (name === 'meltingtemperature' || name === 'meltingpressure') {
+            need(water, "available for water only (IAPWS R14-08); for solids use meltingpoint('copper')");
+            const v = ThermoEngine.num(rest.length === 2 ? rest[1] : rest[0], name);
+            if (name === 'meltingtemperature') { need(v >= IceIh.pt && v <= IceIh.pIII, `P = ${v} Pa is outside the melting curve of ice Ih, 611.657 Pa to 208.566 MPa`); return IceIh.Tmelt(v); }
+            need(v >= IceIh.TIII && v <= IceIh.Tt, `T = ${v} K is outside the melting curve of ice Ih, 251.165 to 273.16 K`); return IceIh.pmelt(v);
+        }
         if (spec.kind === 'sat') {
             let key, val;
             if (rest.length === 1 && spec.argKey) { key = spec.argKey; val = ThermoEngine.num(rest[0], name); }
             else if (rest.length === 2) { key = ThermoEngine.canonKey(rest[0]); val = ThermoEngine.num(rest[1], name); }
             else throw new Error(`${name}(): ${spec.desc}`);
             const q = (out, x) => check(CP.PropsSI(out, key, val, 'Q', x, fluid), `${name} of '${fluid}'`);
+            if (water && ((key === 'T' && val < IceIh.Tt) || (key === 'P' && val < IceIh.pt))) {   // below the triple point: sublimation
+                const T = key === 'T' ? val : IceIh.Tsub(val), p = key === 'P' ? val : IceIh.psub(val);
+                if (name === 'saturationtemperature') { need(key === 'P', "give a pressure"); return T; }
+                if (name === 'saturationpressure') { need(key === 'T', "give a temperature"); return p; }
+                need(name === 'enthalpyvaporization', 'below the triple point (273.16 K, 611.657 Pa) water sublimates: there is no liquid surface');
+                return WaterBelowTriple.fluid(CP, T, p, false).get('H') - WaterBelowTriple.ice(T, p).get('H');   // enthalpy of sublimation
+            }
             if (name === 'saturationtemperature') { need(key === 'P', "give a pressure"); return q('T', 0); }
             if (name === 'saturationpressure') { need(key === 'T', "give a temperature"); return q('P', 0); }
             need(key === 'T' || key === 'P', "the saturation variable must be 'T' or 'P'");
@@ -470,6 +665,10 @@ class ThermoEngine {
         }
 
         const [k1, v1, k2, v2] = ThermoEngine.inputs(name, rest);
+        if (water) {   // ice, sublimation and vapor below the triple point (above it, CoolProp as usual)
+            const st = WaterBelowTriple.state(CP, k1, v1, k2, v2);
+            if (st) return st.get(spec.key);
+        }
         const get = (out) => check(CP.PropsSI(out, k1, v1, k2, v2, fluid), `${name} of '${fluid}'`);
         switch (spec.key) {
             case 'V_SPEC': return 1 / get('D');

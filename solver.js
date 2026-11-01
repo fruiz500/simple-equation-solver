@@ -404,7 +404,21 @@ class BoundedSolver {
             return false;
         };
 
-        let X = clamp(vars.map(v => state[v]));
+        // Starting point. An equation  v = expression  whose v is an unknown of the block still at the default guess of 1 is
+        // evaluated from the current values of the others, so that derived quantities (C = m*cp, NTU = UA/C_min, ...) start
+        // consistent with the guessed ones (the temperatures, say) instead of at 1. Two passes, so that the order of the
+        // lines does not matter; a value that cannot be computed (an error, not a finite number) keeps the guess.
+        const atDefault = new Set(vars.filter(v => state[v] === 1 && (this.variablesMap.get(v) || {}).guess === 1));
+        if (atDefault.size) {
+            setX(vars.map(v => state[v]));
+            for (let pass = 0; pass < 2; pass++) eqs.forEach(eq => {
+                const L = eq.leftAST;
+                if (!L.isSymbolNode || !atDefault.has(L.name) || eq.rightAST.filter(nd => nd.isSymbolNode && nd.name === L.name).length) return;
+                let v; try { v = eq.code[1].evaluate(scope); } catch (e) { return; }
+                if (typeof v === 'number' && Number.isFinite(v)) BoundedSolver.setVar(scope, L.name, v);
+            });
+        }
+        let X = clamp(vars.map(v => atDefault.has(v) && typeof scope[v] === 'number' ? scope[v] : state[v]));
         let r = residuals(X), err, refine = 0, converged = false;
         const rescale = () => { scales = r.map((e, i) => Math.max(size(e, i), 1)); err = merit(r); };
         rescale();

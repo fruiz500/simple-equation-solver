@@ -25,6 +25,173 @@ const CORRELATIONS = (() => {
         rectangle: [[1.0, 3.61, 2.98, 57], [1.43, 3.73, 3.08, 59], [2.0, 4.12, 3.39, 62], [3.0, 4.79, 3.96, 69], [4.0, 5.33, 4.44, 73], [8.0, 6.49, 5.60, 82]],
         circle: [4.36, 3.66, 64], plates: [8.23, 7.54, 96], plates_insulated: [5.39, 4.86, 96], triangle: [3.11, 2.49, 53] };
     const ANNULUS = [[0.05, 17.46, 4.06], [0.10, 11.56, 4.11], [0.25, 7.37, 4.23], [0.50, 5.74, 4.43], [1.00, 4.86, 4.86]];   // Table 8.2: Di/Do, Nu_i, Nu_o
+
+    // Counterflow periodic regenerator (eps_regenerator). Side 1 has C_min = 1, side 2 C_max = 1/C_r; the matrix has C_matrix
+    // = Cr_star. In each period the gas crosses N cells, each with its matrix temperature w uniform: the gas leaves a cell at
+    // w + (T_in - w) exp(-NTU_j/N), and the cell gains (T_in - T_out) (in units of the gas C) times its dwell time, so that
+    // dw/d(eta) = N (T_in - T_out)/Cr*_j over the period's dimensionless time eta, integrated with the trapezoidal rule
+    // (second order, stable at any step) in M steps. Cycles repeat until the matrix profile repeats (to 1e-13), with Aitken
+    // extrapolation along the slowest mode; results on N = M = 64 and 128 are combined by Richardson extrapolation.
+    // Hot gas enters at 1 at cell 1, cold gas at 0 at cell N. The last periodic profile of each grid is kept as the next start.
+    const regenStart = {};
+    const regenGrid = (NTUo, Cr, Crs, hAs, N) => {
+        const hA1 = NTUo * (1 + hAs), hA2 = hA1 / hAs, M = N, dx = 1 / N, dt = 1 / M;
+        const sides = [[hA1, Crs, 1, false], [hA2 * Cr, Crs * Cr, 0, true]];   // NTU_j = hA_j/C_j, Cr*_j = C_matrix/C_j, inlet, reversed
+        let w = regenStart[N] && regenStart[N].length === N ? Float64Array.from(regenStart[N]) : Float64Array.from({ length: N }, (_, i) => 1 - (i + 0.5) / N);
+        const qo = new Float64Array(N), out = [0, 0];
+        let dprev = null;
+        for (let cyc = 0; ; cyc++) {
+            if (cyc > 20000) throw new Error('eps_regenerator(): the periodic state was not reached in 20000 cycles');
+            const w0 = Float64Array.from(w);
+            for (let s = 0; s < 2; s++) {
+                const [ntu, crs, Tin, rev] = sides[s], b = 1 - Math.exp(-ntu * dx), k = dt / (crs * dx);
+                let T = Tin;
+                for (let j = 0; j < N; j++) { const i = rev ? N - 1 - j : j; qo[i] = (T - w[i]) * b; T -= qo[i]; }
+                let sum = 0, Tprev = T;
+                for (let n = 0; n < M; n++) {
+                    T = Tin;
+                    for (let j = 0; j < N; j++) {
+                        const i = rev ? N - 1 - j : j, wn = (w[i] + k / 2 * (qo[i] + b * T)) / (1 + k * b / 2), qn = (T - wn) * b;
+                        w[i] = wn; qo[i] = qn; T -= qn;
+                    }
+                    sum += (Tprev + T) / 2; Tprev = T;
+                }
+                out[s] = sum / M;
+            }
+            let d = 0; const dv = new Float64Array(N);
+            for (let i = 0; i < N; i++) { dv[i] = w[i] - w0[i]; d = Math.max(d, Math.abs(dv[i])); }
+            if (d < 1e-13) break;
+            if (dprev && cyc % 3 === 2) {
+                let a = 0, b2 = 0; for (let i = 0; i < N; i++) { a += dv[i] * dprev[i]; b2 += dprev[i] * dprev[i]; }
+                const r = a / b2; if (r > 0 && r < 0.999) for (let i = 0; i < N; i++) w[i] += dv[i] * r / (1 - r);
+                dprev = null;
+            } else dprev = dv;
+        }
+        regenStart[N] = w;
+        return ((1 - out[0]) + out[1] / Cr) / 2;   // the hot and cold energy balances agree at the periodic state; average them
+    };
+    const regenerator = (NTUo, Cr, Crs, hAs) => {
+        if (NTUo === 0) return 0;
+        if (Crs === 0) return 0;
+        const e1 = regenGrid(NTUo, Cr, Crs, hAs, 64), e2 = regenGrid(NTUo, Cr, Crs, hAs, 128);
+        return e2 + (e2 - e1) / 3;
+    };
+
+    // ---------------- Special functions. Integer-order Bessel functions from their integral representations, evaluated by
+    // the trapezoidal rule, which converges exponentially for these periodic (J, I) or doubly decaying (K) integrands:
+    //   J_n(x) = (1/2pi) int_0^2pi cos(n t - x sin t) dt,  I_n(x) = (1/2pi) int_0^2pi exp(x cos t) cos(n t) dt,
+    //   K_n(x) = int_0^inf exp(-x cosh t) cosh(n t) dt.  Accurate to a few units in the 15th digit.
+    const besselJ = (n, x) => {
+        if (n < 0) return (n % 2 ? -1 : 1) * besselJ(-n, x);
+        const M = 2 * Math.ceil((Math.abs(x) + n) / 2) + 64; let s = 0;
+        for (let k = 0; k < M; k++) { const t = 2 * Math.PI * k / M; s += Math.cos(n * t - x * Math.sin(t)); }
+        return s / M;
+    };
+    const besselI = (n, x) => {
+        n = Math.abs(n); if (x === 0) return n === 0 ? 1 : 0;
+        if (x < 0) return (n % 2 ? -1 : 1) * besselI(n, -x);
+        if (x < 0.5) { let term = pow(x / 2, n) / gammaInt(n + 1), s = term; for (let k = 1; k < 30; k++) { term *= (x * x / 4) / (k * (k + n)); s += term; } return s; }
+        const M = 2 * Math.ceil(x + n / 2) + 64; let s = 0;   // scaled by exp(-x) inside the sum to keep large x finite
+        for (let k = 0; k < M; k++) { const t = 2 * Math.PI * k / M; s += Math.exp(x * (Math.cos(t) - 1)) * Math.cos(n * t); }
+        return s / M * Math.exp(x);
+    };
+    const besselK = (n, x) => {
+        n = Math.abs(n); if (!(x > 0)) return Infinity;
+        const h = 0.05, tmax = Math.acosh(Math.max(745 / x, 1)) + 1; let s = Math.exp(-x) / 2;
+        for (let t = h; t < tmax; t += h) s += Math.exp(-x * Math.cosh(t)) * Math.cosh(n * t);
+        return s * h;
+    };
+    const gammaInt = (m) => { let g = 1; for (let k = 2; k < m; k++) g *= k; return g; };   // (m - 1)!
+    // erf and erfcx(x) = exp(x^2) erfc(x): Taylor series below 2, continued fraction (Lentz) above
+    const erfS = (x) => { let term = x, s = x; for (let k = 1; k < 200; k++) { term *= -x * x / k; const d = term / (2 * k + 1); s += d; if (Math.abs(d) < 1e-17 * Math.abs(s)) break; } return 2 / Math.sqrt(Math.PI) * s; };
+    const erfcx = (x) => {
+        if (x < 2) return Math.exp(x * x) * (1 - erfS(x));
+        let f = x, C = x, D = 0;   // erfc(x) = exp(-x^2)/sqrt(pi) / (x + (1/2)/(x + 1/(x + (3/2)/(x + 2/(x + ...)))))
+        for (let k = 1; k < 500; k++) { const a = k / 2; D = x + a * D; D = 1 / D; C = x + a / C; const dl = C * D; f *= dl; if (Math.abs(dl - 1) < 1e-16) break; }
+        return 1 / (Math.sqrt(Math.PI) * f);
+    };
+    const erfc = (x) => x < 0 ? 2 - erfc(-x) : x < 2 ? 1 - erfS(x) : Math.exp(-x * x) * erfcx(x);
+
+    // ---------------- Radiation (Chapter 12): Planck's law with the CODATA 2018 constants
+    const C1R = 2 * Math.PI * 6.62607015e-34 * 299792458 ** 2, C2R = 6.62607015e-34 * 299792458 / 1.380649e-23;   // W m^2, m K
+    const fBlack = (lT) => {   // F(0 -> lambda T), lambda T in m K
+        if (!(lT > 0)) return 0;
+        const z = C2R / lT;
+        if (z > 0.5) {   // (15/pi^4) sum exp(-n z)/n (z^3 + 3 z^2/n + 6 z/n^2 + 6/n^3)
+            let s = 0; for (let n = 1; n < 2000; n++) { const t = Math.exp(-n * z) / n * (z ** 3 + 3 * z * z / n + 6 * z / (n * n) + 6 / n ** 3); s += t; if (t < 1e-18 * s) break; }
+            return 15 / Math.PI ** 4 * s;
+        }
+        // small z: 1 - (15/pi^4) int_0^z x^3/(e^x - 1) dx, with x^3/(e^x - 1) = sum B_k x^(k+2)/k! (Bernoulli numbers)
+        const B = [1, -1 / 2, 1 / 6, 0, -1 / 30, 0, 1 / 42, 0, -1 / 30, 0, 5 / 66, 0, -691 / 2730, 0, 7 / 6, 0, -3617 / 510];
+        let s = 0, fact = 1; for (let k = 0; k < B.length; k++) { if (k) fact *= k; s += B[k] * z ** (k + 3) / ((k + 3) * fact); }
+        return 1 - 15 / Math.PI ** 4 * s;
+    };
+
+    // ---------------- Transient conduction (Chapter 5): eigenvalues, coefficients and the full series
+    const root = (g, a, b) => {   // Illinois false position on a bracket [a, b] with a sign change
+        let fa = g(a), fb = g(b), side = 0;
+        if (fa === 0) return a; if (fb === 0) return b;
+        for (let k = 0; k < 200; k++) {
+            const c = (a * fb - b * fa) / (fb - fa), fc = g(c);
+            if (fc === 0 || Math.abs(b - a) < 4e-16 * Math.abs(c)) return c;
+            if (fc * fb < 0) { a = b; fa = fb; if (side === -1) fb /= 2; side = -1; } else { if (side === 1) fa /= 2; side = 1; }
+            b = c; fb = fc;
+            if (Math.abs(b - a) < 2e-16 * Math.abs(b)) return b;
+        }
+        return b;
+    };
+    const besselZero = (nu, n) => {   // n-th positive zero of J_nu (nu = 0, 1): McMahon's estimate, then Newton
+        const b = (n + nu / 2 - 1 / 4) * Math.PI, mu = 4 * nu * nu;
+        let x = b - (mu - 1) / (8 * b) - 4 * (mu - 1) * (7 * mu - 31) / (3 * (8 * b) ** 3);
+        for (let k = 0; k < 20; k++) { const d = besselJ(nu, x) / (nu ? besselJ(0, x) - besselJ(1, x) / x : -besselJ(1, x)); x -= d; if (Math.abs(d) < 1e-15 * x) break; }
+        return x;
+    };
+    const GEO = {
+        wall: { eq: (z, Bi) => z * Math.sin(z) - Bi * Math.cos(z), br: (n) => [(n - 1) * Math.PI, (n - 1) * Math.PI + Math.PI / 2],
+            C: (z) => 4 * Math.sin(z) / (2 * z + Math.sin(2 * z)), X: (z, x) => Math.cos(z * x), Q: (z) => Math.sin(z) / z },
+        cylinder: { eq: (z, Bi) => z * besselJ(1, z) - Bi * besselJ(0, z), br: (n) => [n === 1 ? 0 : besselZero(1, n - 1), besselZero(0, n)],
+            C: (z) => 2 / z * besselJ(1, z) / (besselJ(0, z) ** 2 + besselJ(1, z) ** 2), X: (z, x) => besselJ(0, z * x), Q: (z) => 2 * besselJ(1, z) / z },
+        sphere: { eq: (z, Bi) => (1 - Bi) * Math.sin(z) - z * Math.cos(z), br: (n) => [n === 1 ? 1e-300 : (n - 1) * Math.PI, n * Math.PI],
+            C: (z) => 4 * (Math.sin(z) - z * Math.cos(z)) / (2 * z - Math.sin(2 * z)), X: (z, x) => x === 0 ? 1 : Math.sin(z * x) / (z * x), Q: (z) => 3 * (Math.sin(z) - z * Math.cos(z)) / z ** 3 },
+    };
+    const eigenCache = new Map();
+    const eigen = (geo, Bi, n) => {   // the n-th eigenvalue zeta_n and coefficient C_n, cached per geometry and Bi
+        const key = geo + ':' + Bi; let list = eigenCache.get(key);
+        if (!list) { list = []; if (eigenCache.size > 50) eigenCache.clear(); eigenCache.set(key, list); }
+        const G = GEO[geo];
+        while (list.length < n) {
+            const k = list.length + 1, [a, b] = G.br(k);
+            const z = Bi === 0 ? (geo === 'cylinder' ? (k === 1 ? 0 : besselZero(1, k - 1)) : (k - 1) * Math.PI + (geo === 'sphere' && k > 1 ? 0 : 0)) : root((t) => G.eq(t, Bi), a, b);
+            list.push([z, z === 0 ? 1 : G.C(z)]);
+        }
+        return list[n - 1];
+    };
+    const series = (geo, Bi, Fo, fn) => {   // sum over n of C_n exp(-zeta_n^2 Fo) fn(zeta_n), until the terms are negligible
+        if (Bi === 0) return { s: fn(0) === undefined ? 1 : null, n: 1 };
+        let s = 0, n = 1;
+        for (; n <= 400; n++) {
+            const [z, Cn] = eigen(geo, Bi, n), t = Cn * Math.exp(-z * z * Fo) * fn(z);
+            s += t;
+            if (n > 2 && Math.exp(-z * z * Fo) < 1e-16) break;
+        }
+        return { s, n };
+    };
+
+
+    // Table 5.2 series: sum over n of exp(-l_n^2 Fo)/l_n^(2p), l_n the eigenvalues of the Dirichlet (p = 0) or Neumann (p = 1) problem
+    const tsumCache = {};
+    const lam = (g, p, n) => {
+        const key = g + p; const L = tsumCache[key] || (tsumCache[key] = []);
+        while (L.length < n) { const k = L.length + 1;
+            L.push(g === 'wall' ? (p ? k * Math.PI : (k - 0.5) * Math.PI) : g === 'cylinder' ? besselZero(p ? 1 : 0, k)
+                : (p ? root((x) => Math.sin(x) - x * Math.cos(x), k * Math.PI + 1e-9, (k + 0.5) * Math.PI - 1e-9) : k * Math.PI)); }
+        return L[n - 1];
+    };
+    const tsum = (g, Fo, p) => { let s = 0; for (let n = 1; n <= 5000; n++) { const l = lam(g, p, n), t = Math.exp(-l * l * Fo) / l ** (2 * p); s += t; if (Math.exp(-l * l * Fo) < 1e-17) break; } return s; };
+    const shapeWarn = (name, L, D) => { if (L < 4 * D) Corr.warn(name, `L = ${Corr.fmt(L)} is not much larger than ${Corr.fmt(D)}; the formula assumes a long cylinder (it neglects the ends)`); };
+    // ---------------- Fins (Chapter 3): ratio N(a)/N(b) of cosh + p sinh, and sinh ratios, without overflow (a, b >= 0)
+    const chRatio = (a, b, p) => Math.exp(a - b) * ((1 + p) + Math.exp(-2 * a) * (1 - p)) / ((1 + p) + Math.exp(-2 * b) * (1 - p));
+    const shRatio = (a, b) => b === 0 ? 1 : Math.exp(a - b) * (1 - Math.exp(-2 * a)) / (1 - Math.exp(-2 * b));
     const lin = (tab, x, col) => {   // linear interpolation in a table sorted by its first column (clamped at the ends)
         if (x <= tab[0][0]) return tab[0][col];
         for (let i = 1; i < tab.length; i++) if (x <= tab[i][0]) return tab[i - 1][col] + (x - tab[i - 1][0]) / (tab[i][0] - tab[i - 1][0]) * (tab[i][col] - tab[i - 1][col]);
@@ -315,6 +482,171 @@ const CORRELATIONS = (() => {
             f: (T) => { const t = T - 273.15;
                 if (t < 22) Corr.warn('h_dropwise', `T_sat = ${Corr.fmt(t)} degC is below 22 degC, the limit of its range (Eq. 10.49)`);
                 return t <= 100 ? 51104 + 2044 * t : 255510; } },
+
+        // ---------------- Heat exchangers. The epsilon-NTU formulas of Tables 11.3 and 11.4 are in the help, to paste
+        eps_regenerator: { group: 'Heat exchangers', args: ['NTU_o', 'C_r', 'Cr_star', 'hA_star?'], eq: 'Periodic-flow model of Shah and Sekulic (2003), Ch. 5; see Heat exchangers',
+            d: 'Effectiveness q/(C_min (T_h,i - T_c,i)) of a counterflow rotary (or fixed-bed) regenerator at its periodic steady state, computed from the energy equations of the gases and the matrix over the hot and cold periods. NTU_o = [1/(1/(hA)_h + 1/(hA)_c)]/C_min; C_r = C_min/C_max; Cr_star = C_matrix/C_min, with C_matrix = M_matrix c_matrix (revolutions per second) for a rotary regenerator; hA_star = (hA) on the C_min side/(hA) on the C_max side (default 1). Constant properties, no longitudinal conduction in the matrix, no leakage or carryover',
+            rangeText: 'NTU_o <= 50 (grid accuracy better than 1e-5 below about 20)', ranges: [['NTU_o', 0, 50], ['C_r', 0, 1]],
+            f: (NTUo, Cr, Crs, hAs = 1) => regenerator(NTUo, Cr, Crs, hAs) },
+
+        // ---------------- Fins (Chapter 3)
+        fin_q: { group: 'Fins', args: ['tip$', 'mL', 'p?'], eq: 'Table 3.4', d: "Fin heat rate over M = (h P k A_c)^(1/2) theta_b, uniform cross section, m = (h P/(k A_c))^(1/2); tip 'convection' (p = h/(m k)): (sinh mL + p cosh mL)/(cosh mL + p sinh mL); 'adiabatic': tanh mL; 'temperature' (p = theta_L/theta_b): (cosh mL - p)/sinh mL; 'infinite': 1",
+            ranges: [], f: (tip, mL, p = 0) => {
+                const t = mode(tip, ['convection', 'adiabatic', 'temperature', 'infinite'], 'fin_q'), th = Math.tanh(mL);
+                if (t === 'adiabatic') return th;
+                if (t === 'infinite') return 1;
+                if (t === 'convection') return (th + p) / (1 + p * th);
+                return mL === 0 ? Infinity : 1 / th - p * 2 * Math.exp(-mL) / (1 - Math.exp(-2 * mL));
+            } },
+        fin_theta: { group: 'Fins', args: ['tip$', 'mL', 'x_L', 'p?'], eq: 'Table 3.4', d: "Temperature ratio theta/theta_b = (T - T_inf)/(T_b - T_inf) at x/L along a fin of uniform cross section; tips and p as for fin_q. For 'infinite', exp(-mL x/L) (L any reference length)",
+            ranges: [['x_L', 0, 1]], f: (tip, mL, xL, p = 0) => {
+                const t = mode(tip, ['convection', 'adiabatic', 'temperature', 'infinite'], 'fin_theta'), a = mL * (1 - xL);
+                if (t === 'infinite') return Math.exp(-mL * xL);
+                if (t === 'adiabatic') return chRatio(a, mL, 0);
+                if (t === 'convection') return chRatio(a, mL, p);
+                return mL === 0 ? 1 - xL + p * xL : p * shRatio(mL * xL, mL) + shRatio(a, mL);
+            } },
+        eta_fin: { group: 'Fins', args: ['shape$', 'mL'], eq: 'Table 3.5, Eqs. 3.89, 3.93 to 3.97', d: "Fin efficiency; shape 'straight_rectangular' or 'pin' (tanh(mL)/mL, with the corrected length L_c = L + t/2 or L + D/4 in mL), 'straight_triangular': I1(2mL)/(mL I0(2mL)), 'straight_parabolic': 2/([4(mL)^2 + 1]^(1/2) + 1), 'pin_triangular': 2 I2(2mL)/(mL I1(2mL)), 'pin_parabolic': 2/([(4/9)(mL)^2 + 1]^(1/2) + 1). m = (2h/(k t))^(1/2) for straight fins, (4h/(k D))^(1/2) for pins",
+            ranges: [], f: (shape, mL) => {
+                const sh = mode(shape, ['straight_rectangular', 'pin', 'straight_triangular', 'straight_parabolic', 'pin_triangular', 'pin_parabolic'], 'eta_fin');
+                if (mL === 0) return 1;
+                if (sh === 'straight_rectangular' || sh === 'pin') return Math.tanh(mL) / mL;
+                if (sh === 'straight_triangular') return besselI(1, 2 * mL) / (mL * besselI(0, 2 * mL));
+                if (sh === 'straight_parabolic') return 2 / (Math.sqrt(4 * mL * mL + 1) + 1);
+                if (sh === 'pin_triangular') return 2 * besselI(2, 2 * mL) / (mL * besselI(1, 2 * mL));
+                return 2 / (Math.sqrt(4 / 9 * mL * mL + 1) + 1);
+            } },
+        eta_fin_annular: { group: 'Fins', args: ['m_r1', 'r2c_r1'], eq: 'Eq. 3.91', d: 'Efficiency of an annular fin of rectangular profile, m = (2h/(k t))^(1/2), inner radius r1 and corrected outer radius r2c = r2 + t/2: C2 [K1(m r1) I1(m r2c) - I1(m r1) K1(m r2c)]/[I0(m r1) K1(m r2c) + K0(m r1) I1(m r2c)], C2 = (2 r1/m)/(r2c^2 - r1^2)',
+            ranges: [['r2c_r1', 1, Infinity]], f: (a, r) => {
+                if (r === 1) return 1;
+                const b = a * r, C2 = 2 * a / (b * b - a * a);
+                return C2 * (besselK(1, a) * besselI(1, b) - besselI(1, a) * besselK(1, b)) / (besselI(0, a) * besselK(1, b) + besselK(0, a) * besselI(1, b));
+            } },
+
+        // ---------------- Transient conduction (Chapter 5)
+        zeta_n: { group: 'Transient conduction', args: ['geometry$', 'Bi', 'n?'], eq: 'Eqs. 5.39c, 5.50c, 5.51c', d: "n-th eigenvalue (default the first, zeta_1 of Table 5.1) for a plane wall (Bi = hL/k, L the half-thickness): zeta tan zeta = Bi; a long cylinder (Bi = h r_o/k): zeta J1(zeta)/J0(zeta) = Bi; a sphere: 1 - zeta cot zeta = Bi; geometry 'wall', 'cylinder' or 'sphere'",
+            ranges: [], f: (geo, Bi, n = 1) => { if (n !== Math.round(n) || n < 1) throw new Error(`zeta_n(): n = ${n} should be a positive integer`); return eigen(mode(geo, Object.keys(GEO), 'zeta_n'), Bi, n)[0]; } },
+        c_n: { group: 'Transient conduction', args: ['geometry$', 'Bi', 'n?'], eq: 'Eqs. 5.39b, 5.50b, 5.51b', d: 'Coefficient C_n of the series (default C_1 of Table 5.1): wall 4 sin zeta/(2 zeta + sin 2 zeta); cylinder (2/zeta) J1(zeta)/(J0^2(zeta) + J1^2(zeta)); sphere 4 (sin zeta - zeta cos zeta)/(2 zeta - sin 2 zeta)',
+            ranges: [], f: (geo, Bi, n = 1) => { if (n !== Math.round(n) || n < 1) throw new Error(`c_n(): n = ${n} should be a positive integer`); return eigen(mode(geo, Object.keys(GEO), 'c_n'), Bi, n)[1]; } },
+        theta_transient: { group: 'Transient conduction', args: ['geometry$', 'Bi', 'Fo', 'x_L'], eq: 'Eqs. 5.39a, 5.50a, 5.51a', d: "Temperature ratio (T - T_inf)/(T_i - T_inf) in a plane wall, long cylinder or sphere suddenly exposed to convection, from the full series (as many terms as needed; the one-term form of Sec. 5.5 is its first term). x_L = x/L or r/r_o (0 at the center); Fo = alpha t/L^2 or alpha t/r_o^2",
+            ranges: [['x_L', 0, 1]], f: (geo, Bi, Fo, xL) => { const g = mode(geo, Object.keys(GEO), 'theta_transient');
+                if (Fo === 0 || Bi === 0) return 1;
+                const r = series(g, Bi, Fo, (z) => GEO[g].X(z, xL));
+                if (r.n > 400) Corr.warn('theta_transient', `Fo = ${Corr.fmt(Fo)} is too small for 400 terms of the series; use the semi-infinite solid (theta_semiinf)`);
+                return r.s; } },
+        q_q0_transient: { group: 'Transient conduction', args: ['geometry$', 'Bi', 'Fo'], eq: 'Eqs. 5.46, 5.52', d: 'Fraction Q/Q_o of the initial energy (relative to T_inf) transferred up to Fo, plane wall, long cylinder or sphere, full series',
+            ranges: [], f: (geo, Bi, Fo) => { const g = mode(geo, Object.keys(GEO), 'q_q0_transient');
+                if (Fo === 0 || Bi === 0) return 0;
+                const r = series(g, Bi, Fo, GEO[g].Q);
+                if (r.n > 400) Corr.warn('q_q0_transient', `Fo = ${Corr.fmt(Fo)} is too small for 400 terms of the series; use the semi-infinite solid`);
+                return 1 - r.s; } },
+        theta_semiinf: { group: 'Transient conduction', args: ['case$', 'eta', 'beta?'], eq: 'Eqs. 5.57, 5.59, 5.60', d: "Semi-infinite solid, eta = x/(2 (alpha t)^(1/2)); case 'temperature' (surface suddenly at T_s): (T - T_s)/(T_i - T_s) = erf(eta); 'flux' (constant q''_o): (T - T_i) k/(q''_o (alpha t)^(1/2)) = (2/pi^(1/2)) exp(-eta^2) - 2 eta erfc(eta); 'convection' (beta = h (alpha t)^(1/2)/k): (T - T_i)/(T_inf - T_i) = erfc(eta) - exp(2 eta beta + beta^2) erfc(eta + beta)",
+            ranges: [], f: (c, eta, beta) => {
+                const k = mode(c, ['temperature', 'flux', 'convection'], 'theta_semiinf');
+                if (k === 'temperature') return 1 - erfc(eta);
+                if (k === 'flux') return 2 / Math.sqrt(Math.PI) * Math.exp(-eta * eta) - 2 * eta * erfc(eta);
+                if (beta === undefined) throw new Error("theta_semiinf(): the 'convection' case needs beta = h (alpha t)^(1/2)/k");
+                return erfc(eta) - Math.exp(-eta * eta) * erfcx(eta + beta);
+            } },
+
+        qstar_ts: { group: 'Transient conduction', args: ['geometry$', 'Fo', 'q_ss?'], eq: 'Table 5.2a', d: "Dimensionless heat rate q* = q''_s L_c/(k (T_s - T_i)) after a sudden change of the surface temperature to T_s; geometry 'semiinfinite': 1/(pi Fo)^(1/2); interior 'wall' (L_c = half-thickness), 'cylinder', 'sphere' (L_c = r_o): the exact series; exterior 'sphere_exterior' (T_i of the medium): 1/(pi Fo)^(1/2) + 1; 'shape_exterior' (L_c = (A_s/4pi)^(1/2), cases 12 to 15 of Table 4.1): 1/(pi Fo)^(1/2) + q_ss, with q_ss = qss_star(shape)",
+            ranges: [], f: (geo, Fo, qss) => {
+                const g = mode(geo, ['semiinfinite', 'wall', 'cylinder', 'sphere', 'sphere_exterior', 'shape_exterior'], 'qstar_ts');
+                if (Fo === 0) return Infinity;
+                const s = 1 / Math.sqrt(Math.PI * Fo);
+                if (g === 'semiinfinite') return s;
+                if (g === 'sphere_exterior') return s + 1;
+                if (g === 'shape_exterior') { if (qss === undefined) throw new Error("qstar_ts(): 'shape_exterior' needs q_ss (qss_star)"); return s + qss; }
+                return 2 * tsum(g, Fo, 0);
+            } },
+        qstar_qs: { group: 'Transient conduction', args: ['geometry$', 'Fo', 'q_ss?'], eq: 'Table 5.2b', d: "Dimensionless heat rate q* = q''_s L_c/(k (T_s - T_i)) for a constant surface heat flux, T_s(t) the surface temperature it produces; geometries as for qstar_ts; exact: semi-infinite (1/2)(pi/Fo)^(1/2); wall [Fo + 1/3 - 2 sum exp(-l^2 Fo)/l^2]^(-1), l = n pi; cylinder [2Fo + 1/4 - 2 sum ...]^(-1), J1(l) = 0; sphere [3Fo + 1/5 - 2 sum ...]^(-1), tan l = l; sphere exterior [1 - exp(Fo) erfc(Fo^(1/2))]^(-1); 'shape_exterior' only approximately: (1/2)(pi/Fo)^(1/2) + pi/4 for Fo < 0.2, 0.77/Fo^(1/2) + q_ss above",
+            ranges: [], f: (geo, Fo, qss) => {
+                const g = mode(geo, ['semiinfinite', 'wall', 'cylinder', 'sphere', 'sphere_exterior', 'shape_exterior'], 'qstar_qs');
+                if (Fo === 0) return Infinity;
+                if (g === 'semiinfinite') return 0.5 * Math.sqrt(Math.PI / Fo);
+                if (g === 'sphere_exterior') return 1 / (1 - erfcx(Math.sqrt(Fo)));
+                if (g === 'shape_exterior') { if (qss === undefined) throw new Error("qstar_qs(): 'shape_exterior' needs q_ss (qss_star)"); return Fo < 0.2 ? 0.5 * Math.sqrt(Math.PI / Fo) + Math.PI / 4 : 0.77 / Math.sqrt(Fo) + qss; }
+                const a = { wall: [1, 1 / 3], cylinder: [2, 1 / 4], sphere: [3, 1 / 5] }[g];
+                return 1 / (a[0] * Fo + a[1] - 2 * tsum(g, Fo, 1));
+            } },
+        qss_star: { group: 'Conduction shape factors', args: ['shape$', 'd_D?'], eq: 'Table 4.1, cases 12 to 15', d: "Steady dimensionless conduction heat rate q*_ss = q L_c/(k A_s (T_1 - T_2)), L_c = (A_s/4pi)^(1/2), of an isothermal object in an infinite medium; shape 'sphere' 1 (A_s = pi D^2), 'disk' (thin, both faces) 2 2^(1/2)/pi = 0.900 (A_s = pi D^2/2), 'rectangle' (thin, both faces, A_s = 2wL) 0.932, 'cuboid' of square footprint D and height d (A_s = 2D^2 + 4Dd): linear in d/D between 0.943 at 0.1, 0.956 at 1, 0.961 at 2 and 1.111 at 10",
+            ranges: [['d_D', 0.1, 10]], f: (sh, r) => {
+                const k = mode(sh, ['sphere', 'disk', 'rectangle', 'cuboid'], 'qss_star');
+                if (k === 'sphere') return 1; if (k === 'disk') return 2 * Math.SQRT2 / Math.PI; if (k === 'rectangle') return 0.932;
+                if (r === undefined) throw new Error("qss_star(): 'cuboid' needs d_D, the height over the footprint width");
+                return lin([[0.1, 0.943], [1, 0.956], [2, 0.961], [10, 1.111]], r, 1);
+            } },
+        sf_sphere_buried: { group: 'Conduction shape factors', args: ['D [m]', 'z [m]'], out: 'm', eq: 'Table 4.1, case 1', d: 'Shape factor S (q = S k (T_1 - T_2)) of an isothermal sphere of diameter D buried with its center at depth z under an isothermal surface: 2 pi D/(1 - D/(4z))',
+            ranges: [], f: (D, z) => { if (z <= D / 2) throw new Error('sf_sphere_buried(): z must exceed D/2'); return 2 * Math.PI * D / (1 - D / (4 * z)); } },
+        sf_cylinder_buried: { group: 'Conduction shape factors', args: ['D [m]', 'z [m]', 'L [m]'], out: 'm', eq: 'Table 4.1, case 2', d: 'Shape factor of a horizontal isothermal cylinder of diameter D and length L >> D, axis at depth z under an isothermal surface: 2 pi L/acosh(2z/D) (exact for the infinite cylinder; ln(4z/D) replaces acosh when z > 3D/2)',
+            ranges: [], f: (D, z, L) => { if (z <= D / 2) throw new Error('sf_cylinder_buried(): z must exceed D/2'); shapeWarn('sf_cylinder_buried', L, D); return 2 * Math.PI * L / Math.acosh(2 * z / D); } },
+        sf_cylinder_vertical: { group: 'Conduction shape factors', args: ['D [m]', 'L [m]'], out: 'm', eq: 'Table 4.1, case 3', d: 'Shape factor of a vertical isothermal cylinder of diameter D and length L >> D, reaching down from an isothermal surface: 2 pi L/ln(4L/D)',
+            ranges: [], f: (D, L) => { shapeWarn('sf_cylinder_vertical', L, D); return 2 * Math.PI * L / Math.log(4 * L / D); } },
+        sf_two_cylinders: { group: 'Conduction shape factors', args: ['D1 [m]', 'D2 [m]', 'w [m]', 'L [m]'], out: 'm', eq: 'Table 4.1, case 4', d: 'Shape factor between two parallel isothermal cylinders of diameters D1 and D2, axes w apart, length L >> D1, D2, w, in an infinite medium: 2 pi L/acosh[(4w^2 - D1^2 - D2^2)/(2 D1 D2)]',
+            ranges: [], f: (D1, D2, w, L) => { if (2 * w <= D1 + D2) throw new Error('sf_two_cylinders(): the cylinders overlap (w must exceed (D1 + D2)/2)'); shapeWarn('sf_two_cylinders', L, Math.max(D1, D2, w)); return 2 * Math.PI * L / Math.acosh((4 * w * w - D1 * D1 - D2 * D2) / (2 * D1 * D2)); } },
+        sf_cylinder_planes: { group: 'Conduction shape factors', args: ['D [m]', 'z [m]', 'L [m]'], out: 'm', eq: 'Table 4.1, case 5', d: 'Shape factor of a cylinder of diameter D and length L >> z midway between two parallel isothermal planes a distance z from its axis (2z apart): 2 pi L/ln(8z/(pi D)), z >> D/2',
+            ranges: [], f: (D, z, L) => { if (z <= D / 2) throw new Error('sf_cylinder_planes(): z must exceed D/2'); shapeWarn('sf_cylinder_planes', L, z); return 2 * Math.PI * L / Math.log(8 * z / (Math.PI * D)); } },
+        sf_cylinder_square: { group: 'Conduction shape factors', args: ['D [m]', 'w [m]', 'L [m]'], out: 'm', eq: 'Table 4.1, case 6', d: 'Shape factor of a circular cylinder of diameter D centered in a square solid of side w and the same length L >> w: 2 pi L/ln(1.08 w/D), w > D',
+            ranges: [], f: (D, w, L) => { if (w <= D) throw new Error('sf_cylinder_square(): w must exceed D'); return 2 * Math.PI * L / Math.log(1.08 * w / D); } },
+        sf_eccentric: { group: 'Conduction shape factors', args: ['D [m]', 'd [m]', 'z [m]', 'L [m]'], out: 'm', eq: 'Table 4.1, case 7', d: 'Shape factor between a cylinder of diameter d inside a cylinder of diameter D, axes z apart, length L >> D: 2 pi L/acosh[(D^2 + d^2 - 4z^2)/(2 D d)] (z = 0: concentric, 2 pi L/ln(D/d))',
+            ranges: [], f: (D, d, z, L) => { if (d + 2 * z >= D) throw new Error('sf_eccentric(): the inner cylinder must lie inside the outer one (d + 2z < D)'); return 2 * Math.PI * L / Math.acosh((D * D + d * d - 4 * z * z) / (2 * D * d)); } },
+        sf_wall_edge: { group: 'Conduction shape factors', args: ['D [m]'], out: 'm', eq: 'Table 4.1, case 8', d: 'Shape factor of the edge where two walls of thickness L meet, edge length D > 5L: 0.54 D (add to the two plane walls)',
+            ranges: [], f: (D) => 0.54 * D },
+        sf_wall_corner: { group: 'Conduction shape factors', args: ['L [m]'], out: 'm', eq: 'Table 4.1, case 9', d: 'Shape factor of the corner where three walls of thickness L meet (L much smaller than their length and width): 0.15 L',
+            ranges: [], f: (L) => 0.15 * L },
+        sf_disk: { group: 'Conduction shape factors', args: ['D [m]'], out: 'm', eq: 'Table 4.1, case 10', d: 'Shape factor of an isothermal disk of diameter D on the surface of a semi-infinite medium: 2 D',
+            ranges: [], f: (D) => 2 * D },
+        sf_square_channel: { group: 'Conduction shape factors', args: ['W [m]', 'w [m]', 'L [m]'], out: 'm', eq: 'Table 4.1, case 11', d: 'Shape factor of a square channel of outer side W, inner side w and length L >> W: 2 pi L/(0.785 ln(W/w)) for W/w < 1.4, 2 pi L/(0.930 ln(W/w) - 0.050) above',
+            ranges: [], f: (W, w, L) => { if (W <= w) throw new Error('sf_square_channel(): W must exceed w'); const r = W / w; return 2 * Math.PI * L / (r < 1.4 ? 0.785 * Math.log(r) : 0.930 * Math.log(r) - 0.050); } },
+
+        // ---------------- Radiation (Chapters 12 and 13)
+        f_blackbody: { group: 'Radiation', args: ['lambda [m]', 'T [K]'], out: '', eq: 'Eq. 12.30, Table 12.1', d: 'Blackbody radiation function F(0 -> lambda): the fraction of blackbody emission between wavelengths 0 and lambda at temperature T, from the exact series in lambda T. Give lambda with a unit tag, such as lambda = 2 [um]; F(lambda1 -> lambda2) = f_blackbody(lambda2, T) - f_blackbody(lambda1, T)',
+            ranges: [], f: (l, T) => fBlack(l * T) },
+        lambda_blackbody: { group: 'Radiation', args: ['F', 'T [K]'], out: 'm', eq: 'Eq. 12.30 inverted', d: 'Wavelength lambda below which the fraction F of blackbody emission at T lies: the inverse of f_blackbody (so that f_blackbody(lambda_blackbody(F, T), T) = F), 0 < F < 1. Solving f_blackbody(lambda, T) = F for lambda works too, but needs a guess near the answer, since F is flat far from it',
+            ranges: [['F', 0, 1]], f: (F, T) => {
+                if (!(F > 0 && F < 1)) throw new Error(`lambda_blackbody(): F = ${F} must be between 0 and 1`);
+                let lo = Math.log(100e-6), hi = Math.log(1e6 * 1e-6);   // ln(lambda T) in m K, from 100 to 1e6 um K
+                while (fBlack(Math.exp(hi)) < F) hi += 2;
+                while (fBlack(Math.exp(lo)) > F) lo -= 0.5;
+                for (let k = 0; k < 200 && hi - lo > 1e-15; k++) { const m = (lo + hi) / 2; if (fBlack(Math.exp(m)) < F) lo = m; else hi = m; }
+                return Math.exp((lo + hi) / 2) / T;
+            } },
+        eb_lambda: { group: 'Radiation', args: ['lambda [m]', 'T [K]'], out: 'W/m^3', eq: 'Eq. 12.26', d: 'Spectral emissive power of a blackbody (Planck): C1/(lambda^5 [exp(C2/(lambda T)) - 1]), C1 = 2 pi h c^2, C2 = h c/k (CODATA 2018), in W/(m^2 m); divide by 1e6 for W/(m^2 um)',
+            ranges: [], f: (l, T) => C1R / (l ** 5 * Math.expm1(C2R / (l * T))) },
+        vf_parallel_plates: { group: 'Radiation', args: ['W_i', 'W_j'], eq: 'Table 13.1', d: 'View factor F_ij, two-dimensional parallel plates of widths w_i and w_j a distance L apart, centered on a common perpendicular; W = w/L: {[(W_i + W_j)^2 + 4]^(1/2) - [(W_j - W_i)^2 + 4]^(1/2)}/(2 W_i)',
+            ranges: [], f: (Wi, Wj) => (Math.sqrt((Wi + Wj) ** 2 + 4) - Math.sqrt((Wj - Wi) ** 2 + 4)) / (2 * Wi) },
+        vf_inclined_plates: { group: 'Radiation', args: ['alpha_deg'], eq: 'Table 13.1', d: 'View factor, two-dimensional plates of equal width with a common edge, at an angle alpha (degrees): 1 - sin(alpha/2)',
+            ranges: [['alpha_deg', 0, 180]], f: (a) => 1 - Math.sin(a * Math.PI / 360) },
+        vf_perpendicular_plates: { group: 'Radiation', args: ['wj_wi'], eq: 'Table 13.1', d: 'View factor F_ij, two-dimensional perpendicular plates with a common edge, widths w_i and w_j: [1 + w_j/w_i - (1 + (w_j/w_i)^2)^(1/2)]/2',
+            ranges: [], f: (r) => (1 + r - Math.sqrt(1 + r * r)) / 2 },
+        vf_three_sided: { group: 'Radiation', args: ['wj_wi', 'wk_wi'], eq: 'Table 13.1', d: 'View factor F_ij, two-dimensional three-sided enclosure of widths w_i, w_j, w_k: (w_i + w_j - w_k)/(2 w_i)',
+            ranges: [], f: (rj, rk) => { if (rk > 1 + rj || rj > 1 + rk || 1 > rj + rk) throw new Error(`vf_three_sided(): the widths 1, ${Corr.fmt(rj)}, ${Corr.fmt(rk)} cannot form a triangle`); return (1 + rj - rk) / 2; } },
+        vf_parallel_cylinders: { group: 'Radiation', args: ['R', 'S'], eq: 'Table 13.1', d: 'View factor F_ij, long parallel cylinders of radii r_i and r_j, gap s between their surfaces; R = r_j/r_i, S = s/r_i, C = 1 + R + S: (1/2pi){pi + [C^2 - (R + 1)^2]^(1/2) - [C^2 - (R - 1)^2]^(1/2) + (R - 1) acos(R/C - 1/C) - (R + 1) acos(R/C + 1/C)}',
+            ranges: [], f: (R, S) => { const C = 1 + R + S;
+                return (Math.PI + Math.sqrt(C * C - (R + 1) ** 2) - Math.sqrt(C * C - (R - 1) ** 2) + (R - 1) * Math.acos(R / C - 1 / C) - (R + 1) * Math.acos(R / C + 1 / C)) / (2 * Math.PI); } },
+        vf_cylinder_rectangle: { group: 'Radiation', args: ['r_L', 's1_L', 's2_L'], eq: 'Table 13.1', d: 'View factor F_ij from a parallel plane strip (from s_2 to s_1 along it, measured from the foot of the perpendicular through the axis) to a long cylinder of radius r whose axis is a distance L from the plane: [r/(s_1 - s_2)] [atan(s_1/L) - atan(s_2/L)]',
+            signed: ['s1_L', 's2_L'], ranges: [], f: (r, s1, s2) => r / (s1 - s2) * (Math.atan(s1) - Math.atan(s2)) },
+        vf_plane_cylinders: { group: 'Radiation', args: ['D_s'], eq: 'Table 13.1', d: 'View factor F_ij from an infinite plane to a row of long cylinders of diameter D, pitch s: 1 - [1 - (D/s)^2]^(1/2) + (D/s) atan{[(s^2 - D^2)/D^2]^(1/2)}',
+            ranges: [['D_s', 0, 1]], f: (r) => 1 - Math.sqrt(1 - r * r) + r * Math.atan(Math.sqrt(1 - r * r) / r) },
+        vf_aligned_rectangles: { group: 'Radiation', args: ['X_L', 'Y_L'], eq: 'Table 13.2, Fig. 13.4', d: 'View factor between aligned parallel rectangles X by Y a distance L apart: (2/(pi X Y)) {ln[(1 + X^2)(1 + Y^2)/(1 + X^2 + Y^2)]^(1/2) + X (1 + Y^2)^(1/2) atan[X/(1 + Y^2)^(1/2)] + Y (1 + X^2)^(1/2) atan[Y/(1 + X^2)^(1/2)] - X atan X - Y atan Y}, with X = X/L, Y = Y/L',
+            ranges: [], f: (X, Y) => 2 / (Math.PI * X * Y) * (0.5 * Math.log((1 + X * X) * (1 + Y * Y) / (1 + X * X + Y * Y)) + X * Math.sqrt(1 + Y * Y) * Math.atan(X / Math.sqrt(1 + Y * Y))
+                + Y * Math.sqrt(1 + X * X) * Math.atan(Y / Math.sqrt(1 + X * X)) - X * Math.atan(X) - Y * Math.atan(Y)) },
+        vf_coaxial_disks: { group: 'Radiation', args: ['ri_L', 'rj_L'], eq: 'Table 13.2, Fig. 13.5', d: 'View factor F_ij between coaxial parallel disks of radii r_i and r_j a distance L apart; R = r/L, S = 1 + (1 + R_j^2)/R_i^2: (1/2){S - [S^2 - 4 (r_j/r_i)^2]^(1/2)}',
+            ranges: [], f: (Ri, Rj) => { const S = 1 + (1 + Rj * Rj) / (Ri * Ri); return (S - Math.sqrt(S * S - 4 * (Rj / Ri) ** 2)) / 2; } },
+        vf_perpendicular_rectangles: { group: 'Radiation', args: ['Y_X', 'Z_X'], eq: 'Table 13.2, Fig. 13.6', d: 'View factor F_ij, perpendicular rectangles with a common edge of length X: i is X by Y, j is X by Z; W = Y/X, H = Z/X: (1/(pi W)){W atan(1/W) + H atan(1/H) - (H^2 + W^2)^(1/2) atan[1/(H^2 + W^2)^(1/2)] + (1/4) ln{[(1 + W^2)(1 + H^2)/(1 + W^2 + H^2)] [W^2 (1 + W^2 + H^2)/((1 + W^2)(W^2 + H^2))]^(W^2) [H^2 (1 + H^2 + W^2)/((1 + H^2)(H^2 + W^2))]^(H^2)}}',
+            ranges: [], f: (W, H) => { const W2 = W * W, H2 = H * H, s = Math.sqrt(H2 + W2);
+                const lg = Math.log((1 + W2) * (1 + H2) / (1 + W2 + H2)) + W2 * Math.log(W2 * (1 + W2 + H2) / ((1 + W2) * (W2 + H2))) + H2 * Math.log(H2 * (1 + H2 + W2) / ((1 + H2) * (H2 + W2)));
+                return (W * Math.atan(1 / W) + H * Math.atan(1 / H) - s * Math.atan(1 / s) + lg / 4) / (Math.PI * W); } },
+
+        // ---------------- Special functions
+        besselj: { group: 'Special functions', args: ['n', 'x'], eq: 'integral representation', d: 'Bessel function of the first kind J_n(x), integer order n', signed: ['n', 'x'], ranges: [],
+            f: (n, x) => { if (n !== Math.round(n)) throw new Error('besselj(): the order n must be an integer'); return besselJ(n, x); } },
+        besseli: { group: 'Special functions', args: ['n', 'x'], eq: 'integral representation', d: 'Modified Bessel function of the first kind I_n(x), integer order n', signed: ['n', 'x'], ranges: [],
+            f: (n, x) => { if (n !== Math.round(n)) throw new Error('besseli(): the order n must be an integer'); return besselI(n, x); } },
+        besselk: { group: 'Special functions', args: ['n', 'x'], eq: 'integral representation', d: 'Modified Bessel function of the second kind K_n(x), integer order n, x > 0', signed: ['n'], ranges: [],
+            f: (n, x) => { if (n !== Math.round(n)) throw new Error('besselk(): the order n must be an integer'); if (x === 0) throw new Error('besselk(): x must be positive'); return besselK(n, x); } },
+        erfc: { group: 'Special functions', args: ['x'], eq: 'series and continued fraction', d: 'Complementary error function erfc(x) = 1 - erf(x), accurate also where it is small (erf is the math.js function)', signed: ['x'], ranges: [],
+            f: (x) => erfc(x) },
     };
 })();
 
@@ -336,7 +668,7 @@ const Corr = {
                     const an = c.argn[i];
                     if (an.includes('$')) { if (typeof v !== 'string') throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} must be text in quotes`); }
                     else if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} must be a number`);
-                    else if (v < 0 || (v === 0 && /^(Re|Re_x|Re_L|Re_max|Pr|Pr_s|mu_mus|L_D|b_a|Di_Do|f|S_L|H_L|r_i|r_o|D|L|mu_l|mu_v|h_fg|hfg_p|rho_l|sigma|k_l|k_v|C_sf|V|G|N|g|C)\??$/.test(an))) throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} = ${v} must be positive`);
+                    else if ((v < 0 && !(c.signed || []).includes(an.replace(/[$?]/g, ''))) || (v === 0 && /^(Re|Re_x|Re_L|Re_max|Pr|Pr_s|mu_mus|L_D|b_a|Di_Do|f|S_L|H_L|r_i|r_o|D|L|mu_l|mu_v|h_fg|hfg_p|rho_l|sigma|k_l|k_v|C_sf|V|G|N|g|C|C_r|hA_star|W_i|W_j|R|wj_wi|wk_wi|D_s|r_L|X_L|Y_L|ri_L|rj_L|Y_X|Z_X|lambda|T|m_r1|r2c_r1|F|D|D1|D2|w|d|W|d_D)\??$/.test(an))) throw new Error(`${sig}: ${an.replace(/[$?]/g, '')} = ${v} must be positive`);
                 });
                 if (Interp.notes) {   // ranges, checked at the solution only
                     const val = { Pe: a[0] * a[1], Pe_x: a[0] * a[1], RePr: a[0] * a[1], RaS_L: a[0] * a[1] };
