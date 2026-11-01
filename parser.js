@@ -244,7 +244,7 @@ class EESParser {
 
     // Indices that can be computed before solving become part of the variable name: T[i+1] with i = 2 is T[3], and
     // T[N] with the constant N = 20 is T[20]; T[2,3] is T[2, 3]. A range x[1:N] becomes the list [x[1], ..., x[N]],
-    // so sum(x[1:N]) works. Other indices are left alone.
+    // so sum(x[1:N]) works; Z[1:M, 1:N] becomes the matrix of Z[i, j] and Z[2, 1:N] one row. Other indices are left alone.
     flatIndex(node) {
         const C = this.constants || {};
         const val = (n) => {
@@ -258,10 +258,12 @@ class EESParser {
         return node.transform((n) => {
             if (!(n.isAccessorNode && n.object && n.object.isSymbolNode && n.index && n.index.dimensions)) return n;
             const name = n.object.name, dims = n.index.dimensions;
-            if (dims.length === 1 && dims[0].isRangeNode) {
-                const r = val(dims[0]);
-                if (!r) return n;
-                return new math.ArrayNode((math.isMatrix(r) ? r.toArray() : r).map(k => new math.SymbolNode(`${name}[${check(k, name)}]`)));
+            if (dims.some(d => d.isRangeNode)) {
+                const ks = dims.map(d => { const r = val(d); return (r === null || r === undefined) ? null : math.isMatrix(r) ? r.toArray() : r; });
+                if (ks.some(k => k === null)) return n;
+                const build = (i, idx) => i === dims.length ? new math.SymbolNode(`${name}[${idx.map(k => check(k, name)).join(', ')}]`)
+                    : dims[i].isRangeNode ? new math.ArrayNode(ks[i].map(k => build(i + 1, [...idx, k]))) : build(i + 1, [...idx, ks[i]]);
+                return build(0, []);
             }
             const ks = dims.map(val);
             if (ks.some(k => k === null)) return n;

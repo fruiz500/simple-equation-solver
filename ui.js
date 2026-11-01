@@ -205,6 +205,37 @@ document.addEventListener('DOMContentLoaded', () => {
     window.lastPlotDataset = null;
 
     // Render Plotly line chart
+    // Plot appearance: Light colors (default, for reports) or Dark, text size, log axes. Not remembered between visits.
+    const plotStyle = { theme: 'light', font: 12, logX: false, logY: false };
+    const PLOT_THEMES = {
+        light: { paper: '#ffffff', plot: '#ffffff', text: '#000000', grid: '#dddddd', zero: '#999999' },
+        dark: { paper: '#181825', plot: '#11111b', text: '#cdd6f4', grid: '#313244', zero: '#6c7086' },
+    };
+    // Plotly layout changes for the current style (applied with relayout, so overlaid curves are kept)
+    function plotStyleUpdate() {
+        const t = PLOT_THEMES[plotStyle.theme];
+        const u = { paper_bgcolor: t.paper, plot_bgcolor: t.plot, 'font.color': t.text, 'font.size': plotStyle.font };
+        [['xaxis', plotStyle.logX], ['yaxis', plotStyle.logY]].forEach(([a, log]) => Object.assign(u, {
+            [a + '.type']: log ? 'log' : 'linear', [a + '.autorange']: true, [a + '.color']: t.text, [a + '.gridcolor']: t.grid, [a + '.zerolinecolor']: t.zero,
+            [a + '.linecolor']: t.text, [a + '.showline']: true, [a + '.mirror']: true, [a + '.ticks']: 'outside', [a + '.automargin']: true,
+        }));
+        return u;
+    }
+    // A log axis cannot show values <= 0: say how many points are left out
+    function warnLogPoints(pc) {
+        [['x', plotStyle.logX], ['y', plotStyle.logY]].forEach(([ax, log]) => {
+            if (!log) return;
+            const n = pc.data.reduce((s, tr) => s + (tr[ax] || []).filter(v => !(v > 0)).length, 0);
+            if (n) console.warn(`Log ${ax} axis: ${n} point(s) with ${ax} <= 0 cannot be shown.`);
+        });
+    }
+    function applyPlotStyle() {
+        const pc = document.getElementById('plot-container');
+        if (!pc.data || !pc.data.length) return;
+        Plotly.relayout(pc, plotStyleUpdate());
+        warnLogPoints(pc);
+    }
+
     function renderPlot(dataArray, xKey, yKey, chartType = 'lines+markers', isOverlay = false) {
         if (typeof Plotly === 'undefined' || !dataArray || dataArray.length === 0) return;
 
@@ -234,21 +265,19 @@ document.addEventListener('DOMContentLoaded', () => {
             trace.marker = { size: 6 };
         }
 
-        // Layout styling matching app theme
+        // Layout: axis titles here; colors, text size and axis types come from plotStyle (plotStyleUpdate)
         const layout = {
             margin: { t: 25, r: 25, l: 50, b: 45 },
-            paper_bgcolor: '#181825',
-            plot_bgcolor: '#11111b',
-            font: { color: '#cdd6f4', size: 11 },
-            xaxis: { title: xKey + unitTag(xKey), color: '#cdd6f4', gridcolor: '#313244', autorange: true },
-            yaxis: { title: yKey + unitTag(yKey), color: '#cdd6f4', gridcolor: '#313244', autorange: true },
+            xaxis: { title: headerCell(xKey) },
+            yaxis: { title: headerCell(yKey) },
             showlegend: isOverlay // Enable legend automatically when overlaying traces
         };
 
-        // Standard Plotly configuration with active modebar & native double-click reset
+        // Plotly modebar (zoom, pan, reset); its camera button is replaced by Save image, which sets size and format
         const config = {
             displayModeBar: true,
-            responsive: true
+            responsive: true,
+            modeBarButtonsToRemove: ['toImage']
         };
 
         // Handle plot overlay vs fresh plot redraw
@@ -258,7 +287,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // PURGE FIX: Wipe previous Plotly instance and bindings from DOM element
             Plotly.purge('plot-container');
             Plotly.newPlot('plot-container', [trace], layout, config);
+            Plotly.relayout('plot-container', plotStyleUpdate());
         }
+        warnLogPoints(container);
     }
 
     // ==========================================
@@ -589,6 +620,13 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log("Plot canvas cleared.");
     });
 
+    // Log axes, colors and text size: applied at once to the plot shown
+    document.getElementById('plot-logx').addEventListener('change', (e) => { plotStyle.logX = e.target.checked; applyPlotStyle(); });
+    document.getElementById('plot-logy').addEventListener('change', (e) => { plotStyle.logY = e.target.checked; applyPlotStyle(); });
+    document.getElementById('plot-theme').addEventListener('change', (e) => { plotStyle.theme = e.target.value; applyPlotStyle(); });
+    document.getElementById('plot-font-down').addEventListener('click', () => { plotStyle.font = Math.max(8, plotStyle.font - 2); applyPlotStyle(); });
+    document.getElementById('plot-font-up').addEventListener('click', () => { plotStyle.font = Math.min(32, plotStyle.font + 2); applyPlotStyle(); });
+
     // --- Keep the parametric-variable list in sync with the equations ---
     const paramVarSelect = document.getElementById('param-var');
     function refreshParamVarList() {
@@ -632,7 +670,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- Close modals by clicking the dark backdrop (or pressing Escape) ---
-    ['inspector-modal', 'optimize-modal'].forEach(id => {
+    ['inspector-modal', 'optimize-modal', 'image-modal'].forEach(id => {
         const overlay = document.getElementById(id);
         let downOnBackdrop = false;
         overlay.addEventListener('mousedown', (e) => { downOnBackdrop = (e.target === overlay); });
@@ -645,6 +683,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Escape') {
             document.getElementById('inspector-modal').style.display = 'none';
             document.getElementById('optimize-modal').style.display = 'none';
+            document.getElementById('image-modal').style.display = 'none';
         }
     });
 
@@ -702,12 +741,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // A session file is plain text: the equations, then one trailing block comment /*@SESSION ... @*/ holding the variable
     // settings and results (the equation parser ignores it like any comment).
     (function () {
-        // Saves text through the native Save dialog when the browser has one (Chrome, Edge); otherwise asks for a name and downloads.
-        // Returns the file name, or null if the user cancelled.
-        async function saveTextFile(text, suggestedName, exts, description) {
+        // Saves text (or a Blob) through the native Save dialog when the browser has one (Chrome, Edge); otherwise asks for a
+        // name and downloads. Returns the file name, or null if the user cancelled.
+        async function saveTextFile(text, suggestedName, exts, description, mime = 'text/plain') {
             if (window.showSaveFilePicker) {
                 try {
-                    const handle = await window.showSaveFilePicker({ suggestedName, types: [{ description, accept: { 'text/plain': exts } }] });
+                    const handle = await window.showSaveFilePicker({ suggestedName, types: [{ description, accept: { [mime]: exts } }] });
                     const w = await handle.createWritable();
                     await w.write(text); await w.close();
                     return handle.name;
@@ -842,6 +881,33 @@ document.addEventListener('DOMContentLoaded', () => {
             const n = lastTable.tables.reduce((s, tb) => s + tb.rows.length, 0);
             console.log(`Exported ${many ? lastTable.tables.length + ' tables, ' : ''}${n} row(s) to '${name}'.`);
         });
+
+        // --- Save the plot as an image (PNG or SVG), as it looks in the pane but without the controls ---
+        const imgModal = document.getElementById('image-modal');
+        const imgW = document.getElementById('img-width'), imgH = document.getElementById('img-height');
+        const imgFormat = document.getElementById('img-format'), imgScale = document.getElementById('img-scale');
+        let lastImageName = 'plot';
+        document.getElementById('btn-save-image').addEventListener('click', () => {
+            const pc = document.getElementById('plot-container');
+            if (!pc.data || !pc.data.length) { console.warn('Nothing to save yet: make a plot first.'); return; }
+            if (!imgW.value) { imgW.value = 800; imgH.value = 500; }   // a report-friendly default; later choices are kept
+            imgModal.style.display = 'flex';
+        });
+        document.getElementById('image-close').addEventListener('click', () => { imgModal.style.display = 'none'; });
+        imgFormat.addEventListener('change', () => { imgScale.disabled = imgFormat.value === 'svg'; });
+        document.getElementById('btn-image-ok').addEventListener('click', async () => {
+            const w = Math.round(+imgW.value), h = Math.round(+imgH.value), fmt = imgFormat.value, scale = fmt === 'png' ? +imgScale.value : 1;
+            if (!(w >= 100 && w <= 4000 && h >= 100 && h <= 4000)) { alert('Width and height must be between 100 and 4000 pixels.'); return; }
+            imgModal.style.display = 'none';
+            try {
+                const url = await Plotly.toImage(document.getElementById('plot-container'), { format: fmt, width: w, height: h, scale });
+                const blob = await (await fetch(url)).blob();
+                const name = await saveTextFile(blob, `${lastImageName}.${fmt}`, ['.' + fmt], fmt === 'png' ? 'PNG image' : 'SVG image', fmt === 'png' ? 'image/png' : 'image/svg+xml');
+                if (!name) return;
+                lastImageName = name.replace(/\.[A-Za-z0-9]+$/, '');
+                console.log(`Saved the plot as '${name}' (${w * scale} x ${h * scale} pixels${fmt === 'svg' ? ', vector' : ''}).`);
+            } catch (e) { console.error('Could not save the image: ' + e.message); }
+        });
     })();
 
     // --- Console command line: an expression for a quick answer. Everything the equations can use is available
@@ -888,7 +954,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const base = {};
                 (currentResults() || new Map()).forEach((v, k) => { base[k] = v; });
                 const scope = Object.assign(BoundedSolver.prototype.createScopeWithCoolProp(base), kept);
-                const v = node.compile().evaluate(scope);
+                const v = Interp.collect(() => node.compile().evaluate(scope));
                 if (node.isAssignmentNode && node.object.isSymbolNode && !node.index) kept[node.object.name] = v;
                 if (node.isFunctionAssignmentNode) kept[node.name] = v;
                 console.log('  ' + show(v));

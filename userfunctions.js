@@ -94,7 +94,7 @@ class UserFunctions {
         if (!h[1]) throw new Error(`${where}: a function must return something:  function y = ${h[2]}(...)`);
         const name = h[2];
         U.checkName(name, where);
-        if (ThermoEngine.FUNCS[name.toLowerCase()] || math[name] !== undefined || name === 'ln' || /__\d+$/.test(name)) {
+        if (ThermoEngine.FUNCS[name.toLowerCase()] || math[name] !== undefined || name === 'ln' || name === 'interpolate' || /__\d+$/.test(name)) {
             throw new Error(`${where}: '${name}' is already a built-in name; pick another function name.`);
         }
         let outs = h[1].trim();
@@ -198,18 +198,19 @@ class UserFunctions {
         return { name, params, outputs, body: top.out, line: no };
     }
 
-    // Builds the callables for this parse. Calls are cached (last arguments -> outputs): functions are pure.
+    // Builds the callables for this parse. Calls are cached (last arguments -> outputs): functions are pure, except that
+    // interpolate() is lenient while the solver iterates and strict at the solution, so the mode is part of the key.
     static activate(defs, strConsts) {
         const U = UserFunctions;
         U.active = defs;
         U.entries = {};
         const fresh = (v) => (v !== null && typeof v === 'object') ? math.clone(v) : v;
         defs.forEach((def, name) => {
-            let lastArgs = null, lastOuts = null;
+            let lastArgs = null, lastOuts = null, lastMode = null;
             const call = (args) => {
-                if (!(lastArgs && args.length === lastArgs.length && args.every((a, i) => a === lastArgs[i]))) {
+                if (!(lastArgs && lastMode === Interp.lenient && args.length === lastArgs.length && args.every((a, i) => a === lastArgs[i]))) {
                     lastOuts = U.run(def, args);
-                    lastArgs = args;
+                    lastArgs = args; lastMode = Interp.lenient;
                 }
                 return lastOuts;
             };
@@ -224,6 +225,7 @@ class UserFunctions {
         U.base = new Map();
         Object.keys(ThermoEngine.FUNCS).forEach(p => U.base.set(p, (fluid, ...a) => ThermoEngine.evaluate(p, fluid, ...a)));
         U.base.set('ln', Math.log);
+        U.base.set('interpolate', Interp.fn);
         Object.entries(U.entries).forEach(([n, f]) => U.base.set(n, f));
         Object.entries(strConsts || {}).forEach(([n, v]) => U.base.set(n + '$', v));
     }

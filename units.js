@@ -151,6 +151,26 @@ class UnitConsistencyChecker {
         });
     }
 
+   // interpolate(xs, ys, x) and interpolate(xs, ys, Z, x, y): x has the units of xs (and y of ys); the result those of ys (or Z).
+    // A table written as a list has the common units of its entries.
+    static interpDims(node, ctx) {
+        const U = UnitConsistencyChecker;
+        const args = node.args.filter(x => !(x.isConstantNode && typeof x.value === 'string'));
+        const leaves = (n) => n.isArrayNode ? n.items.flatMap(leaves) : [n];
+        const tbl = (n) => U.addDims(leaves(n).map(x => U.dimOf(x, ctx)), ctx, n);
+        const pairs = args.length === 3 ? [[args[2], args[0]]] : args.length === 5 ? [[args[3], args[0]], [args[4], args[1]]] : [];
+        pairs.forEach(([q, t]) => {
+            const dq = U.dimOf(q, ctx), dt = tbl(t);
+            if (ctx.infer && dq.k === 'unk' && U.isDim(dt)) U.inferDown(q, dt, ctx);
+            if (ctx.infer && dt.k === 'unk' && U.isDim(dq)) leaves(t).forEach(x => { if (U.dimOf(x, ctx).k === 'unk') U.inferDown(x, dq, ctx); });
+            if (U.isDim(dq) && U.isDim(dt) && !U.same(dq, dt)) {
+                U.report(ctx, `interpolate() looks up [${U.nameFor(dq.d)}] in a table of [${U.nameFor(dt.d)}] in '${node.toString()}'`);
+            }
+        });
+        const res = args.length === 3 ? args[1] : args.length === 5 ? args[2] : null;
+        return res ? tbl(res) : U.UNK;
+    }
+
     static inferDown(node, d, ctx) {
         const U = UnitConsistencyChecker;
         if (!U.isDim(d)) return;
@@ -240,6 +260,7 @@ class UnitConsistencyChecker {
                 const o = uf.def.outputs[uf.k];
                 return (o && o.unit) ? U.mk(U.dimsOfUnit(o.unit)) : U.UNK;
             }
+            if (name === 'interpolate') return U.interpDims(node, ctx);
             const a = node.args.map(x => U.dimOf(x, ctx));
             const DIMLESS_IN = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
                 'asinh', 'acosh', 'atanh', 'exp', 'expm1', 'log', 'log10', 'log2', 'log1p', 'ln', 'erf'];

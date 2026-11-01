@@ -1,4 +1,80 @@
 // Solvers: partitioning, damped Newton / Levenberg-Marquardt, ode45, parametric sweeps, 1-D optimization.
+
+// ==========================================
+// TABULATED DATA: interpolate(xs, ys, x) linear, interpolate(xs, ys, Z, x, y) bilinear, Z[i, j] at xs[i], ys[j].
+// Outside the table it is an error, unless 'extrapolate' is the last argument (the end segments are extended).
+// ==========================================
+const Interp = {
+    used: false,     // set by every call; solve() then checks the solution for values outside the tables
+    lenient: false,  // while solve() iterates: outside the table, extend the end segments without complaint
+    notes: null,     // a Map while extrapolation notes are being collected
+    fmt: (v) => String(+v.toPrecision(7)),
+    // A list of numbers: [1, 2, 3], x[1:N], or a one-row or one-column matrix
+    vec(v, what) {
+        let a = math.isMatrix(v) ? v.toArray() : v;
+        if (Array.isArray(a) && Array.isArray(a[0]) && (a.length === 1 || a.every(r => Array.isArray(r) && r.length === 1))) a = a.flat();
+        if (!Array.isArray(a) || a.some(x => typeof x !== 'number' || !Number.isFinite(x))) {
+            throw new Error(`interpolate(): ${what} must be a list of numbers, such as [300, 400, 500] or x[1:N]`);
+        }
+        return a;
+    },
+    axis(v, what) {
+        const a = Interp.vec(v, what);
+        if (a.length < 2) throw new Error(`interpolate(): ${what} needs at least 2 values`);
+        for (let i = 1; i < a.length; i++) if (!(a[i] > a[i - 1])) {
+            throw new Error(`interpolate(): ${what} must be strictly increasing, but value ${i + 1} (${Interp.fmt(a[i])}) is not above value ${i} (${Interp.fmt(a[i - 1])})`);
+        }
+        return a;
+    },
+    // Index i of the segment xs[i] .. xs[i+1] used for x (the end segment when x is outside the table)
+    find(xs, x, what, extrapolate) {
+        if (typeof x !== 'number' || !Number.isFinite(x)) throw new Error(`interpolate(): ${what} must be a number`);
+        const n = xs.length, lo = xs[0], hi = xs[n - 1];
+        const F = (v) => (v !== x || (Interp.fmt(x) !== Interp.fmt(lo) && Interp.fmt(x) !== Interp.fmt(hi))) ? Interp.fmt(v) : String(x);   // just past an end: all digits
+        if (x < lo || x > hi) {
+            if (!extrapolate && !Interp.lenient) throw new Error(`interpolate(): ${what} = ${F(x)} is outside the table, ${F(lo)} to ${F(hi)} (add 'extrapolate' as the last argument to extend the end segments)`);
+            const tol = 1e-9 * (hi - lo);
+            if (Interp.notes && (x < lo - tol || x > hi + tol)) {
+                Interp.notes.set(`${what} ${x} ${lo} ${hi}`, `interpolate(): extrapolated: ${what} = ${F(x)} is outside the table, ${F(lo)} to ${F(hi)}`);
+            }
+        }
+        let a = 0, b = n - 1;
+        while (b - a > 1) { const m = (a + b) >> 1; if (x < xs[m]) b = m; else a = m; }
+        return a;
+    },
+    fn(...args) {
+        Interp.used = true;
+        let ext = false;
+        if (typeof args[args.length - 1] === 'string') {
+            const o = args.pop();
+            if (o.toLowerCase() !== 'extrapolate') throw new Error(`interpolate(): unknown option '${o}' (the only option is 'extrapolate')`);
+            ext = true;
+        }
+        if (args.length === 3) {
+            const xs = Interp.axis(args[0], 'xs'), ys = Interp.vec(args[1], 'ys'), x = args[2];
+            if (ys.length !== xs.length) throw new Error(`interpolate(): xs has ${xs.length} values but ys has ${ys.length}`);
+            const i = Interp.find(xs, x, 'x', ext), t = (x - xs[i]) / (xs[i + 1] - xs[i]);
+            return ys[i] + t * (ys[i + 1] - ys[i]);
+        }
+        if (args.length === 5) {
+            const xs = Interp.axis(args[0], 'xs'), ys = Interp.axis(args[1], 'ys'), x = args[3], y = args[4];
+            const Z = math.isMatrix(args[2]) ? args[2].toArray() : args[2];
+            if (!(Array.isArray(Z) && Z.length === xs.length && Z.every(r => Array.isArray(r) && r.length === ys.length && r.every(z => typeof z === 'number' && Number.isFinite(z))))) {
+                throw new Error(`interpolate(): Z must be a matrix of numbers with ${xs.length} rows (one per xs value) and ${ys.length} columns (one per ys value)`);
+            }
+            const i = Interp.find(xs, x, 'x', ext), j = Interp.find(ys, y, 'y', ext);
+            const u = (x - xs[i]) / (xs[i + 1] - xs[i]), v = (y - ys[j]) / (ys[j + 1] - ys[j]);
+            return (1 - u) * (1 - v) * Z[i][j] + u * (1 - v) * Z[i + 1][j] + (1 - u) * v * Z[i][j + 1] + u * v * Z[i + 1][j + 1];
+        }
+        throw new Error(`interpolate() is used as interpolate(xs, ys, x) or interpolate(xs, ys, Z, x, y), with 'extrapolate' as an optional last argument; got ${args.length + (ext ? 1 : 0)} arguments`);
+    },
+    // Runs f strictly (outside the table is an error) while collecting extrapolation notes, then shows each one once
+    collect(f) {
+        Interp.notes = new Map(); Interp.lenient = false;
+        try { return f(); }
+        finally { const n = [...Interp.notes.values()]; Interp.notes = null; n.forEach(m => console.warn(m)); }
+    },
+};
 // ==========================================
 // 4. BOUNDED NEWTON-RAPHSON & SOLVER ENGINE
 // ==========================================
@@ -34,6 +110,7 @@ class BoundedSolver {
         });
 
         scope.ln = Math.log;
+        scope.interpolate = Interp.fn;
         Object.assign(scope, UserFunctions.entries, OdeBlocks.entries);
 
         return scope;
@@ -42,6 +119,7 @@ class BoundedSolver {
     solve() {
         const state = {};
         this.variablesMap.forEach((meta, name) => state[name] = meta.guess);
+        Interp.used = false; Interp.lenient = true;
 
         // Partition system into sequentially solvable single blocks and coupled simultaneous blocks
         const blocks = this.partitionEquations();
@@ -51,6 +129,21 @@ class BoundedSolver {
             else if (block.type === 'simultaneous') this.solveSimultaneousBlock(block.eqIndices, block.vars, state);
             else if (block.type === 'check') this.checkEquation(block.eqIndex, state);
         }
+        // interpolate(): values outside a table are an error, and extrapolation is reported, at the solution only
+        // (while iterating, trial values may leave the table, so the end segments are extended quietly)
+        Interp.lenient = false;
+        if (Interp.used) Interp.collect(() => {
+            const sc = this.createScopeWithCoolProp(state);
+            const outside = (e) => /interpolate\(\): \w+ = .* is outside the table/.test(e.message);
+            this.parsedASTs.forEach(eq => {
+                try { eq.leftAST.evaluate(sc); eq.rightAST.evaluate(sc); }
+                catch (e) { if (outside(e)) throw new Error(/^ode block/.test(e.message) ? e.message : `Line ${eq.lineNo}: ${e.message}`); }
+            });
+            OdeBlocks.active.forEach(blk => {
+                try { OdeBlocks.run(blk, blk.inputs.map(nm => state[nm])); }
+                catch (e) { if (outside(e)) throw new Error(`ode block at line ${blk.no}: ` + /interpolate\(\): \w+ = .* is outside the table.*?segments\)/.exec(e.message)[0]); }
+            });
+        });
         if (OdeBlocks.active.length > 0) OdeBlocks.record(state); else OdeBlocks.tables = [];
 
         // Solve Ordinary Differential Equations (ODEs) if defined
