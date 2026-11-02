@@ -1,0 +1,15 @@
+{
+  "name": "equation-solver-tests",
+  "private": true,
+  "description": "Checks of the equation solver against exact or published answers",
+  "scripts": {
+    "test": "node run.mjs",
+    "test:engine": "node run.mjs --engine"
+  },
+  "dependencies": {
+    "mathjs": "11.8.0",
+    "coolprop-wasm": "6.6.0",
+    "plotly.js-dist-min": "2.24.1",
+    "playwright": "^1.48.0"
+  }
+}
