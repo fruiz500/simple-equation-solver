@@ -43,4 +43,13 @@ messages([
 ]);
 s = run(`units = 5\ny = units*2`).st;
 ok("a variable called units still works", s.y === 10, s.y);
+
+// Unknown functions are found when the equations are read (by Check, too), with the nearest name when it looks like a typo
+messages([
+  ['typo', err(`h = enthalpie('water', 300, 1e5)`), /Unknown function 'enthalpie\(\)'\. Did you mean 'enthalpy\(\)'\?/],
+  ['case', err(`h = Enthalpy('water', 300, 1e5)`), /Unknown function 'Enthalpy\(\)'\. Did you mean 'enthalpy\(\)'\?/],
+  ['corr', err(`Nu = nu_gnielinsky(1e4, 0.7)`), /Did you mean 'nu_gnielinski\(\)'\?/],
+  ['none', err(`x = foo(3)`), /Unknown function 'foo\(\)'\. See the Help for the functions available\./],
+]);
+ok('known kinds of functions still pass: math.js, ln, if, integral, user functions, multiple outputs', err(`function [a, b] = two(x)\n  a = x\n  b = 2*x\nend\nfunction c = one(x)\n  c = x\nend\ny = sin(1) + ln(2) + if(1 > 0, 1, 2) + integral(t^2, t, 0, 1) + one(3)\n[p, q] = two(4)`) === null);
 done();
