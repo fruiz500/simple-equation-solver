@@ -410,6 +410,10 @@ class EESParser {
             if (child.isFunctionNode && child.fn.isSymbolNode && UserFunctions.BLOCKED.has(child.fn.name)) {
                 throw new Error(`'${child.fn.name}()' is not available in equations.`);
             }
+            if (child.isFunctionNode && child.fn.isSymbolNode && !EESParser.isCallable(child.fn.name)) {
+                const near = EESParser.closestFunction(child.fn.name);
+                throw new Error(`Unknown function '${child.fn.name}()'.` + (near ? ` Did you mean '${near}()'?` : ' See the Help for the functions available.'));
+            }
             if (child.isFunctionNode && child.fn.isSymbolNode && UserFunctions.active.has(child.fn.name)) {
                 const np = UserFunctions.active.get(child.fn.name).params.length;
                 if (child.args.length !== np) throw new Error(`${child.fn.name}() takes ${np} argument(s), got ${child.args.length}.`);
@@ -427,6 +431,22 @@ class EESParser {
             this.registerVariable(child.name);
             if (varSet) varSet.add(child.name);
         });
+    }
+
+    // Names that can be called in equations: math.js, property functions, correlations, user functions, and internal names
+    static isCallable(n) {
+        return (typeof math[n] === 'function') || ThermoEngine.propKeys[n] !== undefined || Corr.entries[n] !== undefined ||
+            UserFunctions.active.has(n) || UserFunctions.entries[n] !== undefined || OdeBlocks.entries[n] !== undefined ||
+            ['ln', 'interpolate', 'if', 'integral', 'derivative'].includes(n) || /__\d+$/.test(n) || /^ode#/.test(n);
+    }
+    static closestFunction(n) {   // the known name nearest in spelling (case ignored), if close enough to be a likely typo
+        const lev = (a, b) => { let p = Array.from({ length: b.length + 1 }, (_, j) => j);
+            for (let i = 1; i <= a.length; i++) { const c = [i]; for (let j = 1; j <= b.length; j++) c[j] = Math.min(p[j] + 1, c[j - 1] + 1, p[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); p = c; } return p[b.length]; };
+        const names = [...Object.keys(ThermoEngine.propKeys), ...Object.keys(Corr.entries), ...UserFunctions.active.keys(), 'ln', 'interpolate', 'integral', 'derivative',
+            ...Object.keys(math).filter(k => typeof math[k] === 'function' && /^[a-z]\w*$/.test(k))];
+        let best = null, bd = Infinity;
+        for (const m of names) { const d = lev(n.toLowerCase(), m.toLowerCase()); if (d < bd) { bd = d; best = m; } }
+        return bd <= Math.max(1, Math.floor(n.length / 4)) ? best : null;
     }
 
     registerVariable(name) {
