@@ -322,7 +322,7 @@ class OdeBlocks {
             });
             node.traverse((c, path) => {
                 if (!c.isSymbolNode || path === 'fn') return;
-                if (accBases.has(c.name) || bases.has(c.name) || names.has(c.name) || OdeBlocks.RESERVED.has(c.name)) return;
+                if (accBases.has(c.name) || bases.has(c.name) || names.has(c.name) || OdeBlocks.RESERVED.has(c.name) || /^__iv\d+$/.test(c.name)) return;
                 if (ThermoEngine.FUNCS[c.name.toLowerCase()] || UserFunctions.active.has(c.name)) throw new Error(`${where}: '${c.name}' is a function name; call it with parentheses.`);
                 if (!inputs.includes(c.name)) inputs.push(c.name);
             });

@@ -238,11 +238,26 @@ class UserFunctions {
     static lowerIf(node) {
         return node.transform((n) => {
             if (n.isFunctionNode && n.fn.isSymbolNode && n.fn.name === 'derivative') return UserFunctions.lowerDerivative(n);
+            if (n.isFunctionNode && n.fn.isSymbolNode && n.fn.name === 'integral') return UserFunctions.lowerIntegral(n);
             if (!(n.isFunctionNode && n.fn.isSymbolNode && n.fn.name === 'if')) return n;
             if (n.args.length !== 3) throw new Error(`if() takes 3 arguments, if(condition, value if true, value if false), but got ${n.args.length}`);
             const [c, a, b] = n.args.map(x => UserFunctions.lowerIf(x));
             return new math.ConditionalNode(c, a, b);
         });
+    }
+
+    // integral(expression, x, a, b): x is a dummy variable. It is renamed __iv1, __iv2, ... in the expression, so that it is
+    // never taken for an unknown of the equations (nor for an input of a function or an ode block).
+    static ivCount = 0;
+    static ivNames = new Map();   // __iv7 -> the name written, for messages
+    static lowerIntegral(n) {
+        if (n.args.length !== 4) throw new Error('integral() takes 4 arguments: integral(expression, x, a, b)');
+        const [ex, x, a, b] = n.args.map(z => UserFunctions.lowerIf(z));
+        if (!x.isSymbolNode) throw new Error('in integral(expression, x, a, b), x must be a variable name');
+        const iv = new math.SymbolNode('__iv' + (++UserFunctions.ivCount));
+        UserFunctions.ivNames.set(iv.name, x.name);
+        const body = ex.transform(c => (c.isSymbolNode && c.name === x.name) ? iv : c);
+        return new math.FunctionNode(new math.SymbolNode('integral'), [body, iv, a, b]);
     }
 
     static lowerDerivative(n) {

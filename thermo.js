@@ -533,6 +533,256 @@ const WaterBelowTriple = {
 };
 
 // ==========================================
+// LiBr-H2O solutions at vapor-liquid equilibrium: J. Patek and J. Klomfar, A computationally effective formulation of
+// the thermodynamic properties of LiBr-H2O solutions from 273 to 500 K over full composition range, Int. J. Refrig. 29
+// (2006) 566-578. Each property is that of saturated liquid water at T (IAPWS-95, from CoolProp) weighted by the mole
+// fraction of water, plus a correction in the mole fraction x of LiBr: Eqs. (1)-(5), Tables 4-8. The water reference
+// is that of IAPWS-95 (liquid at the triple point: u = 0, s = 0), as for steam, so solution and steam enthalpies can be
+// used together in energy balances. Inputs and outputs here are SI and per kg; the concentration is the LiBr mass fraction.
+class LiBrH2O {
+    static M_LiBr = 0.08685; static M_H2O = 0.018015268;            // kg/mol
+    static Tc = 647.096; static T0 = 221;                            // K
+    static hc = 37548.5; static sc = 79.3933; static cpt = 76.0226;  // J/mol, J/(mol K), J/(mol K)
+    static rhoc = 17873;                                             // mol/m^3
+    static P = { a: [-2.41303e2, 1.91750e7, -1.75521e8, 3.25432e7, 3.92571e2, -2.12626e3, 1.85127e8, 1.91216e3],
+        m: [3, 4, 4, 8, 1, 1, 4, 6], n: [0, 5, 6, 3, 0, 2, 6, 0], t: [0, 0, 0, 0, 1, 1, 1, 1] };
+    static RHO = { a: [1.746, 4.709], m: [1, 1], t: [0, 6] };
+    static CPT = { a: [-14.2094, 40.4943, 111.135, 229.980, 1345.26, -0.0141010, 0.0124977, -0.000683209],
+        m: [2, 3, 3, 3, 3, 2, 1, 1], n: [0, 0, 1, 2, 3, 0, 3, 2], t: [0, 0, 0, 0, 0, 2, 3, 4] };
+    static H = { a: [2.27431, -7.99511, 385.239, -16394, -422.562, 0.113314, -8.33474, -17383.3, 6.49763, 3245.52, -13464.3,
+        39932.2, -258877, -0.00193046, 2.80616, -40.4479, 145.342, -2.74873, -449.743, -12.1794, -0.00583739, 0.233910,
+        0.341888, 8.85259, -17.8731, 0.0735179, -0.000179430, 0.00184261, -0.00624282, 0.00684765],
+        m: [1, 1, 2, 3, 6, 1, 3, 5, 4, 5, 5, 6, 6, 1, 2, 2, 2, 5, 6, 7, 1, 1, 2, 2, 2, 3, 1, 1, 1, 1],
+        n: [0, 1, 6, 6, 2, 0, 0, 4, 0, 4, 5, 5, 6, 0, 3, 5, 7, 0, 3, 1, 0, 4, 2, 6, 7, 0, 0, 1, 2, 3],
+        t: [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5] };
+    static S = { a: [1.53091, -4.52564, 698.302, -21666.4, -1475.33, 0.0847012, -6.59523, -29533.1, 0.00956314, -0.188679,
+        9.31752, 5.78104, 13893.1, -17176.2, 415.108, -55564.7, -0.00423409, 30.5242, -1.67620, 14.8283, 0.00303055,
+        -0.0401810, 0.149252, 2.59240, -0.177421, -0.0000699650, 0.000605007, -0.00165228, 0.00122966],
+        m: [1, 1, 2, 3, 6, 1, 3, 5, 1, 2, 2, 4, 5, 5, 6, 6, 1, 3, 5, 7, 1, 1, 1, 2, 3, 1, 1, 1, 1],
+        n: [0, 1, 6, 6, 2, 0, 0, 4, 0, 0, 4, 0, 4, 5, 2, 5, 0, 4, 0, 1, 0, 2, 4, 7, 1, 0, 1, 2, 3],
+        t: [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 5, 5] };
+    static TMIN = 273.16; static TMAX = 500; static WMAX = 0.75;
+    static check(name, T, w) {
+        if (!(T >= LiBrH2O.TMIN && T <= LiBrH2O.TMAX)) throw new Error(`${name}(): T = ${T} K is outside 273.16 to 500 K, the range of the formulation`);
+        if (!(w >= 0 && w <= LiBrH2O.WMAX)) throw new Error(`${name}(): the LiBr mass fraction x = ${w} is outside 0 to 0.75`);
+    }
+    static moleFraction(w) { const L = LiBrH2O; return (w / L.M_LiBr) / (w / L.M_LiBr + (1 - w) / L.M_H2O); }
+    static molarMass(xn) { return xn * LiBrH2O.M_LiBr + (1 - xn) * LiBrH2O.M_H2O; }
+    static sum(c, xn, y) {   // sum of a_i x^m_i (0.4 - x)^n_i y^t_i
+        let s = 0;
+        for (let i = 0; i < c.a.length; i++) s += c.a[i] * xn ** c.m[i] * (c.n ? (0.4 - xn) ** c.n[i] : 1) * y ** c.t[i];
+        return s;
+    }
+    static water(out, T) { return ThermoEngine.call('props', [out, 'water', 'T', T, 'Q', 0]); }
+    static pressure(T, w) {   // Eq. (1): p(T, x) = p_sat,water(theta)
+        const L = LiBrH2O; L.check('libr_pressure', T, w);
+        const theta = T - L.sum(L.P, L.moleFraction(w), T / L.Tc);
+        if (!(theta >= L.TMIN)) throw new Error(`libr_pressure(): T = ${T} K and x = ${w} give a water temperature of ${theta.toFixed(2)} K, below the triple point; the solution is far into crystallization`);
+        return L.water('P', theta);
+    }
+    static molar(name, T, w) {   // per mole of solution, then per kg
+        const L = LiBrH2O; L.check(name, T, w);
+        const xn = L.moleFraction(w), y = L.Tc / (T - L.T0);
+        let v;
+        if (name === 'libr_enthalpy') v = (1 - xn) * L.water('Hmolar', T) + L.hc * L.sum(L.H, xn, y);
+        else if (name === 'libr_entropy') v = (1 - xn) * L.water('Smolar', T) + L.sc * L.sum(L.S, xn, y);
+        else if (name === 'libr_cp') v = (1 - xn) * L.water('Cpmolar', T) + L.cpt * L.sum(L.CPT, xn, y);
+        else if (name === 'libr_density') return ((1 - xn) * L.water('Dmolar', T) + L.rhoc * L.sum(L.RHO, xn, T / L.Tc)) * L.molarMass(xn);
+        return v / L.molarMass(xn);
+    }
+    static solve(f, lo, hi) {   // bisection on a bracketed root: f(lo) and f(hi) have opposite signs
+        let flo = f(lo);
+        for (let k = 0; k < 200 && hi - lo > 1e-13 * Math.max(1, Math.abs(hi)); k++) {
+            const mid = (lo + hi) / 2, fm = f(mid);
+            if ((fm < 0) === (flo < 0)) { lo = mid; flo = fm; } else hi = mid;
+        }
+        return (lo + hi) / 2;
+    }
+    static evaluate(name, a) {
+        const L = LiBrH2O, num = (x, what) => ThermoEngine.num(x, `${name}() ${what}`);
+        if (a.length !== 2) throw new Error(`${name}(): ${ThermoEngine.FUNCS[name].desc}`);
+        if (name === 'libr_pressure') return L.pressure(num(a[0], 'T'), num(a[1], 'x'));
+        if (name === 'libr_temperature') {   // p rises with T
+            const P = num(a[0], 'P'), w = num(a[1], 'x'); L.check(name, 300, w);
+            const f = (T) => { try { return Math.log(L.pressure(T, w) / P); } catch (e) { return -Infinity; } };   // below the formulation: too low
+            if (f(L.TMAX) < 0) throw new Error(`libr_temperature(): P = ${P} Pa with x = ${w} has no equilibrium temperature up to 500 K`);
+            if (f(L.TMIN) > 0) throw new Error(`libr_temperature(): P = ${P} Pa with x = ${w} has no equilibrium temperature above 273.16 K`);
+            return L.solve(f, L.TMIN, L.TMAX);
+        }
+        if (name === 'libr_concentration') {   // p falls with x
+            const T = num(a[0], 'T'), P = num(a[1], 'P'); L.check(name, T, 0);
+            const f = (w) => { try { return Math.log(L.pressure(T, w) / P); } catch (e) { return -Infinity; } };
+            if (f(0) < 0) throw new Error(`libr_concentration(): P = ${P} Pa is above the vapor pressure of pure water at T = ${T} K (${L.water('P', T).toPrecision(5)} Pa)`);
+            if (f(L.WMAX) > 0) throw new Error(`libr_concentration(): P = ${P} Pa at T = ${T} K needs a LiBr mass fraction above 0.75, the range of the formulation`);
+            return L.solve(f, 0, L.WMAX);
+        }
+        return L.molar(name, num(a[0], 'T'), num(a[1], 'x'));
+    }
+}
+
+// ==========================================
+// Ammonia-water mixtures, PROVISIONAL: the Gibbs-energy model of Ibrahim and Klein (ASHRAE Trans. 99(1), 1993, 1495-1502),
+// the model used by EES, but with the coefficients of Ziegler and Trepp (Int. J. Refrig. 7 (1984) 101-106), from which
+// Ibrahim and Klein started; their own modified coefficients are to replace these. Pure liquids and gases: reduced Gibbs
+// energies (TB = 100 K, PB = 10 bar); liquid mixture: ideal mixing plus a three-term excess Gibbs energy; vapor mixture:
+// ideal solution; phase equilibrium from equal chemical potentials. Reference state as in EES. Measured against EES:
+// single-phase states agree closely; saturation temperatures differ by up to about 1.5 K and saturated enthalpies by up
+// to about 10 kJ/kg. x is the ammonia MASS fraction; SI units outside, kJ, kmol and bar inside.
+class NH3H2O {
+    static R = 8.314; static TB = 100; static PB = 10;                    // kJ/(kmol K), K, bar
+    static MA = 17.03026; static MW = 18.0153;                            // kg/kmol
+    static C = {
+        a: { A: [3.971423e-2, -1.790557e-5, -1.308905e-2, 3.752836e-3], B: [1.634519e1, -6.508119, 1.448937],
+             C: [-1.049377e-2, -8.288224, -6.647257e2, -3.045352e3], D: [3.673647, 9.989629e-2, 3.617622e-2],
+             hl: 4.878573, hg: 26.468873, sl: 1.644773, sg: 8.339026, T0: 3.2252, P0: 2.0 },
+        w: { A: [2.748796e-2, -1.016665e-5, -4.452025e-3, 8.389246e-4], B: [1.214557e1, -1.898065, 2.911966e-1],
+             C: [2.136131e-2, -3.169291e1, -4.634611e4, 0], D: [4.019170, -5.175550e-2, 1.951939e-2],
+             hl: 21.821141, hg: 60.965058, sl: 5.733498, sg: 13.453430, T0: 5.0705, P0: 3.0 } };
+    static E = [-41.733398, 0.02414, 6.702285, -0.011475, 63.608967, -62.490768, 1.761064, 0.008626, 0.387983, -0.004772,
+        -4.648107, 0.836376, -3.553627, 0.000904, 24.361723, -20.736547];
+    static GL(c, Tr, Pr) {   // reduced Gibbs energy of a pure liquid
+        const { A, B, T0, P0 } = c;
+        return c.hl - Tr * c.sl + B[0] * (Tr - T0) + B[1] / 2 * (Tr ** 2 - T0 ** 2) + B[2] / 3 * (Tr ** 3 - T0 ** 3)
+            - B[0] * Tr * Math.log(Tr / T0) - B[1] * Tr * (Tr - T0) - B[2] / 2 * Tr * (Tr ** 2 - T0 ** 2)
+            + (A[0] + A[2] * Tr + A[3] * Tr ** 2) * (Pr - P0) + A[1] / 2 * (Pr ** 2 - P0 ** 2);
+    }
+    static GG(c, Tr, Pr) {   // reduced Gibbs energy of a pure gas (with the corrected C2 term)
+        const { C, D, T0, P0 } = c;
+        return c.hg - Tr * c.sg + D[0] * (Tr - T0) + D[1] / 2 * (Tr ** 2 - T0 ** 2) + D[2] / 3 * (Tr ** 3 - T0 ** 3)
+            - D[0] * Tr * Math.log(Tr / T0) - D[1] * Tr * (Tr - T0) - D[2] / 2 * Tr * (Tr ** 2 - T0 ** 2)
+            + Tr * Math.log(Pr / P0) + C[0] * (Pr - P0) + C[1] * (Pr / Tr ** 3 - 4 * P0 / T0 ** 3 + 3 * P0 * Tr / T0 ** 4)
+            + C[2] * (Pr / Tr ** 11 - 12 * P0 / T0 ** 11 + 11 * P0 * Tr / T0 ** 12)
+            + C[3] / 3 * (Pr ** 3 / Tr ** 11 - 12 * P0 ** 3 / T0 ** 11 + 11 * P0 ** 3 * Tr / T0 ** 12);
+    }
+    static GE(x, Tr, Pr) {   // reduced excess Gibbs energy of the liquid
+        const E = NH3H2O.E, d = 2 * x - 1;
+        const F1 = E[0] + E[1] * Pr + (E[2] + E[3] * Pr) * Tr + E[4] / Tr + E[5] / Tr ** 2;
+        const F2 = E[6] + E[7] * Pr + (E[8] + E[9] * Pr) * Tr + E[10] / Tr + E[11] / Tr ** 2;
+        const F3 = E[12] + E[13] * Pr + E[14] / Tr + E[15] / Tr ** 2;
+        return (F1 + F2 * d + F3 * d * d) * x * (1 - x);
+    }
+    static xlnx(x) { return x <= 0 ? 0 : x * Math.log(x); }
+    static GmL(x, Tr, Pr) { const N = NH3H2O; return x * N.GL(N.C.a, Tr, Pr) + (1 - x) * N.GL(N.C.w, Tr, Pr) + Tr * (N.xlnx(x) + N.xlnx(1 - x)) + N.GE(x, Tr, Pr); }
+    static GmG(y, Tr, Pr) { const N = NH3H2O; return y * N.GG(N.C.a, Tr, Pr) + (1 - y) * N.GG(N.C.w, Tr, Pr) + Tr * (N.xlnx(y) + N.xlnx(1 - y)); }
+    static mole(w) { const N = NH3H2O; return (w / N.MA) / (w / N.MA + (1 - w) / N.MW); }
+    static mass(x) { const N = NH3H2O; return x * N.MA / (x * N.MA + (1 - x) * N.MW); }
+    // h [kJ/kg], s [kJ/(kg K)], v [m3/kg] of one phase of mole fraction x, from G by central differences
+    static phase(G, x, T, P) {
+        const N = NH3H2O, Tr = T / N.TB, Pr = P / N.PB, dT = 1e-5 * Tr, dP = 1e-5 * Pr, M = x * N.MA + (1 - x) * N.MW;
+        const g = G(x, Tr, Pr), sr = -(G(x, Tr + dT, Pr) - G(x, Tr - dT, Pr)) / (2 * dT), vr = (G(x, Tr, Pr + dP) - G(x, Tr, Pr - dP)) / (2 * dP);
+        return { h: N.R * N.TB * (g + Tr * sr) / M, s: N.R * sr / M, v: N.R * N.TB / N.PB / 100 * vr / M };
+    }
+    // ammonia and water mole fractions of the vapor in equilibrium with liquid x (they add up to 1 at equilibrium)
+    static yOf(x, T, P) {
+        const N = NH3H2O, Tr = T / N.TB, Pr = P / N.PB, e = 1e-7;
+        const lo = Math.max(x - e, 1e-12), hi = Math.min(x + e, 1 - 1e-12);
+        const g = N.GmL(x, Tr, Pr), dg = (N.GmL(hi, Tr, Pr) - N.GmL(lo, Tr, Pr)) / (hi - lo);
+        return [Math.exp((g + (1 - x) * dg - N.GG(N.C.a, Tr, Pr)) / Tr), Math.exp((g - x * dg - N.GG(N.C.w, Tr, Pr)) / Tr)];
+    }
+    static bisect(f, lo, hi, n = 80) {   // f(lo) and f(hi) of opposite signs
+        let flo = f(lo);
+        for (let k = 0; k < n; k++) { const m = (lo + hi) / 2, fm = f(m); if ((fm < 0) === (flo < 0)) { lo = m; flo = fm; } else hi = m; }
+        return (lo + hi) / 2;
+    }
+    // bubble temperature of liquid x (mole) at P, and the vapor in equilibrium
+    static bubble(x, P) {
+        const N = NH3H2O, f = (T) => { const [a, w] = N.yOf(x, T, P); return a + w - 1; };
+        // scan down from 700 K to the first crossing, then bisect: at low T and high P the gas terms (in 1/T^11) misbehave
+        let hi = 700;
+        if (!(f(hi) > 0)) throw new Error('nh3h2o(): no bubble temperature found below 700 K');
+        while (hi > 225 && f(hi - 5) > 0) hi -= 5;
+        if (hi <= 225) throw new Error(`nh3h2o(): at P = ${(P * 1e5).toPrecision(4)} Pa this liquid boils below 225 K, outside the formulation`);
+        const T = N.bisect(f, hi - 5, hi, 60), [a, w] = N.yOf(x, T, P);
+        return { T, x, y: a / (a + w) };
+    }
+    // liquid and vapor in equilibrium at T and P (mole fractions); null outside the two-phase range at this P
+    static equilibrium(T, P) {
+        const N = NH3H2O, f = (x) => { const [a, w] = N.yOf(x, T, P); return a + w - 1; };
+        const lo = 1e-10, hi = 1 - 1e-10, flo = f(lo), fhi = f(hi);
+        if ((flo < 0) === (fhi < 0)) return null;
+        const x = N.bisect(f, lo, hi, 70), [a, w] = N.yOf(x, T, P);
+        return { x, y: a / (a + w) };
+    }
+    // the state at T, P with overall ammonia mass fraction z: liquid, vapor, or both
+    static stateTPz(T, P, z) {
+        const N = NH3H2O, zm = N.mole(z);
+        const Tb = N.bubble(zm, P).T;
+        if (T <= Tb) return N.single('liquid', T, P, z);
+        const Td = N.dewT(zm, P);
+        if (T >= Td) return N.single('vapor', T, P, z);
+        const eq = N.equilibrium(T, P), xl = N.mass(eq.x), yv = N.mass(eq.y);
+        return N.mix(T, P, z, xl, yv, (z - xl) / (yv - xl));
+    }
+    static dewT(y, P) {   // dew temperature of vapor y (mole) at P: the equilibrium vapor gets leaner in ammonia as T rises
+        const N = NH3H2O, Ta = N.bubble(1 - 1e-10, P).T, Tw = N.bubble(1e-10, P).T;
+        return N.bisect((T) => { const eq = N.equilibrium(T, P); return eq ? eq.y - y : (T < (Ta + Tw) / 2 ? 1 : -1); }, Ta + 1e-9, Tw - 1e-9);
+    }
+    static single(kind, T, P, z) {
+        const N = NH3H2O, p = N.phase(kind === 'liquid' ? N.GmL : N.GmG, N.mole(z), T, P);
+        return { T, P, x: z, h: p.h, s: p.s, v: p.v, q: kind === 'liquid' ? -0.001 : 1.001, xl: z, yv: z };
+    }
+    static mix(T, P, z, xl, yv, q) {
+        const N = NH3H2O, L = N.phase(N.GmL, N.mole(xl), T, P), V = N.phase(N.GmG, N.mole(yv), T, P);
+        return { T, P, x: z, h: (1 - q) * L.h + q * V.h, s: (1 - q) * L.s + q * V.s, v: (1 - q) * L.v + q * V.v, q, xl, yv };
+    }
+    // state at P with overall z and vapor mass fraction q (0 bubble, 1 dew)
+    static statePzq(P, z, q) {
+        const N = NH3H2O, zm = N.mole(z);
+        if (q === 0) { const b = N.bubble(zm, P); return N.mix(b.T, P, z, z, N.mass(b.y), 0); }
+        const Tb = N.bubble(zm, P).T, Td = N.dewT(zm, P);
+        if (q === 1) { const eq = N.equilibrium(Td, P); return N.mix(Td, P, z, eq ? N.mass(eq.x) : z, z, 1); }
+        const qOf = (T) => { const eq = N.equilibrium(T, P); return eq ? (z - N.mass(eq.x)) / (N.mass(eq.y) - N.mass(eq.x)) - q : 0; };
+        const T = N.bisect(qOf, Tb + 1e-9, Td - 1e-9), eq = N.equilibrium(T, P);
+        return N.mix(T, P, z, N.mass(eq.x), N.mass(eq.y), q);
+    }
+    // nh3h2o('output', 'key1', v1, 'key2', v2, 'key3', v3), all SI: T [K], P [Pa], x (ammonia mass fraction), q (vapor mass
+    // fraction; -0.001 for subcooled liquid and 1.001 for superheated vapor, as in EES), h [J/kg]. Inputs: T,P,x  P,x,q  T,x,q
+    // T,P,q (q = 0 or 1: the liquid or the vapor in equilibrium)  P,x,h. Outputs: T P x h s u v q, and xl, yv (the ammonia mass
+    // fractions of the liquid and the vapor; both equal x in one phase).
+    static OUT = { t: 'T', p: 'P', x: 'x', h: 'h', s: 's', u: 'u', v: 'v', q: 'q', xl: 'xl', yv: 'yv' };
+    static evaluate(a) {
+        const N = NH3H2O, num = (v, k) => ThermoEngine.num(v, `nh3h2o() value for '${k}'`);
+        if (a.length !== 7) throw new Error("nh3h2o(): use nh3h2o('output', 'key1', v1, 'key2', v2, 'key3', v3), keys T, P, x, q or h");
+        const out = N.OUT[String(a[0]).trim().toLowerCase()];
+        if (!out) throw new Error(`nh3h2o(): unknown output '${a[0]}'; use T, P, x, h, s, u, v, q, xl or yv`);
+        const inp = {};
+        for (let i = 1; i < 7; i += 2) {
+            const k = String(a[i]).trim().toLowerCase();
+            if (!['t', 'p', 'x', 'q', 'h'].includes(k)) throw new Error(`nh3h2o(): unknown input '${a[i]}'; the inputs are T, P, x, q and h`);
+            if (k in inp) throw new Error(`nh3h2o(): input '${a[i]}' is given twice`);
+            inp[k] = num(a[i + 1], a[i]);
+        }
+        const has = (...ks) => ks.every(k => k in inp);
+        const P = 'p' in inp ? inp.p / 1e5 : null;   // bar
+        if (P !== null && !(P >= 0.2 && P <= 110)) throw new Error(`nh3h2o(): P = ${inp.p} Pa is outside 0.2 to 110 bar, the range of the formulation`);
+        if ('t' in inp && !(inp.t >= 230 && inp.t <= 600)) throw new Error(`nh3h2o(): T = ${inp.t} K is outside 230 to 600 K, the range of the formulation`);
+        if ('x' in inp && !(inp.x >= 0 && inp.x <= 1)) throw new Error(`nh3h2o(): x = ${inp.x} must be an ammonia mass fraction from 0 to 1`);
+        if ('q' in inp && !(inp.q >= 0 && inp.q <= 1)) throw new Error(`nh3h2o(): q = ${inp.q} must be a vapor mass fraction from 0 to 1 (a saturated or two-phase state)`);
+        const z = 'x' in inp ? Math.min(Math.max(inp.x, 1e-9), 1 - 1e-9) : null;
+        let st;
+        if (has('t', 'p', 'x')) st = N.stateTPz(inp.t, P, z);
+        else if (has('p', 'x', 'q')) st = N.statePzq(P, z, inp.q);
+        else if (has('t', 'x', 'q')) {
+            const f = (lp) => N.statePzq(Math.exp(lp), z, inp.q).T - inp.t;   // the saturation temperature rises with P
+            if (f(Math.log(0.2)) > 0 || f(Math.log(110)) < 0) throw new Error(`nh3h2o(): no pressure between 0.2 and 110 bar gives this T, x and q`);
+            st = N.statePzq(Math.exp(N.bisect(f, Math.log(0.2), Math.log(110), 60)), z, inp.q);
+        } else if (has('t', 'p', 'q')) {
+            if (inp.q !== 0 && inp.q !== 1) throw new Error('nh3h2o(): with T, P and q, q must be 0 (the saturated liquid) or 1 (the saturated vapor); give x as well for other states');
+            const eq = N.equilibrium(inp.t, P);
+            if (!eq) throw new Error(`nh3h2o(): at P = ${inp.p} Pa, T = ${inp.t} K is outside the two-phase range (between the boiling points of ammonia and water)`);
+            const xl = N.mass(eq.x), yv = N.mass(eq.y);
+            st = N.mix(inp.t, P, inp.q ? yv : xl, xl, yv, inp.q);
+        } else if (has('p', 'x', 'h')) {
+            const hk = inp.h / 1000, f = (T) => N.stateTPz(T, P, z).h - hk;   // h rises with T at constant P and x
+            if (f(230) > 0 || f(600) < 0) throw new Error(`nh3h2o(): h = ${inp.h} J/kg at this P and x lies outside 230 to 600 K`);
+            st = N.stateTPz(N.bisect(f, 230, 600, 60), P, z);
+        } else throw new Error("nh3h2o(): the inputs must be T, P, x or P, x, q or T, x, q or T, P, q or P, x, h");
+        const si = { T: st.T, P: st.P * 1e5, x: st.x, h: st.h * 1000, s: st.s * 1000, v: st.v, u: (st.h - st.P * 100 * st.v) * 1000, q: st.q, xl: st.xl, yv: st.yv };
+        return si[out];
+    }
+}
+
+// ==========================================
 // 2. THERMODYNAMIC PROPERTY ENGINE (COOLPROP)
 // ==========================================
 // One table drives everything: the functions available in equations, their SI result units (for the unit checker),
@@ -601,6 +851,16 @@ class ThermoEngine {
         gwp500: { key: 'GWP500', unit: '', kind: 'const', desc: 'Global warming potential, 500-year horizon (refrigerants)' },
         odp: { key: 'ODP', unit: '', kind: 'const', desc: 'Ozone depletion potential (refrigerants)' },
         ...IG_FUNCS,
+        // --- LiBr-H2O solutions (Patek and Klomfar 2006); x = LiBr mass fraction, T in K, P in Pa ---
+        libr_pressure: { key: '', unit: 'Pa', kind: 'libr', argUnits: ['K', ''], desc: 'Equilibrium (water vapor) pressure of a LiBr-H2O solution: libr_pressure(T, x)' },
+        libr_temperature: { key: '', unit: 'K', kind: 'libr', argUnits: ['Pa', ''], desc: 'Equilibrium temperature of a LiBr-H2O solution: libr_temperature(P, x)' },
+        libr_concentration: { key: '', unit: '', kind: 'libr', argUnits: ['K', 'Pa'], desc: 'LiBr mass fraction of a solution in equilibrium at T and P: libr_concentration(T, P)' },
+        libr_enthalpy: { key: '', unit: 'J/kg', kind: 'libr', argUnits: ['K', ''], desc: 'Specific enthalpy of a LiBr-H2O solution (same reference as water and steam): libr_enthalpy(T, x)' },
+        libr_entropy: { key: '', unit: 'J/(kg K)', kind: 'libr', argUnits: ['K', ''], desc: 'Specific entropy of a LiBr-H2O solution: libr_entropy(T, x)' },
+        libr_cp: { key: '', unit: 'J/(kg K)', kind: 'libr', argUnits: ['K', ''], desc: 'Specific heat of a LiBr-H2O solution: libr_cp(T, x)' },
+        libr_density: { key: '', unit: 'kg/m^3', kind: 'libr', argUnits: ['K', ''], desc: 'Density of a LiBr-H2O solution: libr_density(T, x)' },
+        // --- ammonia-water mixtures (provisional: see the NH3H2O class) ---
+        nh3h2o: { key: '', unit: '', kind: 'nh3', desc: "Ammonia-water mixture (provisional model): nh3h2o('output', 'key1', v1, 'key2', v2, 'key3', v3); keys T, P, x (NH3 mass fraction), q, h; outputs T, P, x, h, s, u, v, q, xl, yv" },
         // --- general access to everything else CoolProp offers ---
         props: { key: '', unit: '', kind: 'props', desc: "props('output', fluid, 'key1', v1, 'key2', v2): any CoolProp output parameter" },
         props1: { key: '', unit: '', kind: 'props1', desc: "props1('output', fluid): any CoolProp fluid constant" },
@@ -658,6 +918,8 @@ class ThermoEngine {
         }
         if (spec.kind === 'phys') return IdealGas.constant(a);   // these two need no CoolProp
         if (spec.kind === 'ig' || spec.kind === 'igmix') return IdealGas.evaluate(name, a);
+        if (spec.kind === 'libr') return LiBrH2O.evaluate(name, a);
+        if (spec.kind === 'nh3') return NH3H2O.evaluate(a);
         if (spec.kind === 'exergy') {   // physical exergy relative to the same fluid at T0, P0, through the property functions above
             if (a.length !== 5 && a.length !== 7) throw new Error(`${name}(): use ${name}(fluid, T, P, T0, P0) or ${name}(fluid, 'key1', v1, 'key2', v2, T0, P0)`);
             const T0 = ThermoEngine.num(a[a.length - 2], `${name}() T0`), P0 = ThermoEngine.num(a[a.length - 1], `${name}() P0`);

@@ -78,8 +78,12 @@
         <!-- Panel 3: Parametric Table Sweep Controls -->
         <div class="panel" id="parametric-panel">
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <h2>Parametric Table</h2><button id="btn-export-table" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
-                    title="Export the table to a text file">Export...</button>
+                <h2>Parametric Table</h2>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button id="btn-clear-table" class="secondary" title="Remove the table" style="padding:2px 8px; font-size:var(--fs-small);">Clear Table</button>
+                    <button id="btn-export-table" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
+                        title="Export the table to a text file">Export...</button>
+                </div>
             </div>
             <div class="param-controls">
                 <label title="Variable to sweep (comment out the equation that fixes it)">Var: <select id="param-var" style="width:90px;"></select></label>

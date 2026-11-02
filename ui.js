@@ -39,6 +39,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     consoleOutput.addEventListener('click', (e) => { const n = e.target.dataset && e.target.dataset.line; if (n) selectLine(Number(n)); });
 
+    // ---- Tab and Shift+Tab indent and unindent (the selected lines, or at the cursor), by two spaces, undoably.
+    // Esc and then Tab leaves the editor, as the Tab key does elsewhere.
+    let tabLeaves = false;
+    editor.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { tabLeaves = true; return; }
+        if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey || tabLeaves) { tabLeaves = false; return; }
+        e.preventDefault();
+        const v = editor.value, a = editor.selectionStart, b = editor.selectionEnd;
+        const put = (from, to, text, selA, selB) => {
+            editor.setSelectionRange(from, to);
+            if (!document.execCommand('insertText', false, text)) { editor.setRangeText(text, from, to); editor.dispatchEvent(new Event('input')); }
+            editor.setSelectionRange(selA, selB);
+        };
+        if (a === b && !e.shiftKey) { put(a, a, '  ', a + 2, a + 2); return; }
+        const s0 = v.lastIndexOf('\n', a - 1) + 1, e0 = (b > a && v[b - 1] === '\n') ? b - 1 : (v.indexOf('\n', b) < 0 ? v.length : v.indexOf('\n', b));
+        const lines = v.slice(s0, e0).split('\n');
+        const out = lines.map(l => e.shiftKey ? l.replace(/^ {1,2}|^\t/, '') : '  ' + l);
+        const first = out[0].length - lines[0].length, total = out.join('\n').length - lines.join('\n').length;
+        if (!total) return;
+        put(s0, e0, out.join('\n'), Math.max(s0, a + first), b + total);
+    });
+
     // ---- Line numbers beside the editor. Lines named in an error or a warning ('line 12', 'lines 3, 5') are marked
     // until the next Solve, Check, table or Min/Max, or until the number of lines changes. Click a number to select the line.
     const gutter = document.querySelector('#editor-gutter > div');
@@ -286,6 +308,18 @@ document.addEventListener('DOMContentLoaded', () => {
         modal.style.display = 'flex';
     };
 
+    // Bounds limit the search for unknowns solved iteratively; a value computed directly from others is not held to them,
+    // so one that lands outside its bounds is reported
+    function warnOutOfBounds() {
+        parser.variables.forEach((m, name) => {
+            const x = m.value;
+            if (typeof x !== 'number' || !Number.isFinite(x) || (x >= m.lower && x <= m.upper)) return;
+            const b = (y) => Number.isFinite(y) ? fmtNum(toDisp(name, y)) : (y > 0 ? 'inf' : '-inf');
+            console.warn(`${name} = ${fmtNum(toDisp(name, x))}${unitTag(name)} is outside its bounds, ${b(m.lower)} to ${b(m.upper)}. ` +
+                `Bounds limit the search for unknowns solved by iteration; this value is computed directly from other ones.`);
+        });
+    }
+
     // Update guesses box: remembered in this browser
     const updateBox = document.getElementById('update-guesses');
     try { updateBox.checked = localStorage.getItem('ses-update-guesses') === '1'; } catch (e) { }
@@ -360,9 +394,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     return;
                 }
                 const v = parseFloat(raw);
-                if (field === 'guess') { if (Number.isFinite(v)) meta.guess = UnitConv.toSI(v, meta.unit); }
-                else if (field === 'lower') meta.lower = Number.isFinite(v) ? UnitConv.toSI(v, meta.unit) : -Infinity;
-                else if (field === 'upper') meta.upper = Number.isFinite(v) ? UnitConv.toSI(v, meta.unit) : Infinity;
+                if (field === 'guess') { if (Number.isFinite(v)) meta.guess = UnitConv.toSI(v, meta.unit); return; }
+                const name = e.target.getAttribute('data-var'), old = meta[field];
+                meta[field] = Number.isFinite(v) ? UnitConv.toSI(v, meta.unit) : (field === 'lower' ? -Infinity : Infinity);
+                if (meta.lower > meta.upper) {   // impossible bounds: refused
+                    console.error(`${name}: Min (${fmtNum(toDisp(name, meta.lower))}) cannot be above Max (${fmtNum(toDisp(name, meta.upper))})${unitTag(name)}; the change was undone.`);
+                    meta[field] = old;
+                    e.target.value = inputNum(toDisp(name, old));
+                }
             });
         });
     }
@@ -441,15 +480,18 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         // Plotly modebar (zoom, pan, reset); its camera button is replaced by Save image, which sets size and format
+        // The legend can be dragged anywhere, and a curve renamed by clicking its name in the legend
         const config = {
             displayModeBar: true,
             responsive: true,
-            modeBarButtonsToRemove: ['toImage']
+            modeBarButtonsToRemove: ['toImage'],
+            edits: { legendPosition: true, legendText: true }
         };
 
         // Handle plot overlay vs fresh plot redraw
         if (isOverlay && container.data && container.data.length > 0) {
             Plotly.addTraces('plot-container', trace);
+            Plotly.relayout('plot-container', { showlegend: true });   // two curves or more: show which is which
         } else {
             // PURGE FIX: Wipe previous Plotly instance and bindings from DOM element
             Plotly.purge('plot-container');
@@ -507,6 +549,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             snapshotResults();
+            warnOutOfBounds();
             adopt();
             updateVariablesUI(parser.variables);
 
@@ -760,8 +803,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function updatePlotControls(dataset, defaultX, defaultY) {
         if (!dataset || dataset.length === 0) return;
 
-        // Get numerical keys only
-        const keys = Object.keys(dataset[0]).filter(k => typeof dataset[0][k] === 'number' || Array.isArray(dataset[0][k]));
+        // Numerical columns only, in the order of the other lists (alphabetical)
+        const keys = displayOrder(Object.keys(dataset[0]).filter(k => typeof dataset[0][k] === 'number' || Array.isArray(dataset[0][k])));
 
         // Keep the user's current Y choice if it still exists in the new dataset
         const prevY = plotYSelect.value;
@@ -792,6 +835,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // "Clear Plot" button listener
+    document.getElementById('btn-clear-table').addEventListener('click', () => {
+        parametricContainer.innerHTML = '';
+        lastTable = null;
+        console.log("Parametric table cleared.");
+    });
+
     document.getElementById('btn-clear-plot').addEventListener('click', () => {
         Plotly.purge('plot-container');
         console.log("Plot canvas cleared.");

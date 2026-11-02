@@ -420,7 +420,7 @@ class EESParser {
                 throw new Error(`'${child.name}' is a user function; call it with parentheses or pick another variable name.`);
             }
             if (arrayBases.has(child.name)) return;
-            if (RESERVED.has(child.name)) return;
+            if (RESERVED.has(child.name) || /^__iv\d+$/.test(child.name)) return;   // __iv: the dummy variable of an integral()
             if (ThermoEngine.propKeys[child.name.toLowerCase()] !== undefined) {
                 throw new Error(`'${child.name}' is a property-function name; call it with parentheses or pick another variable name.`);
             }

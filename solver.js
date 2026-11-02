@@ -184,7 +184,10 @@ class BoundedSolver {
 
     solve() {
         const state = {};
-        this.variablesMap.forEach((meta, name) => state[name] = meta.guess);
+        this.variablesMap.forEach((meta, name) => {
+            if (meta.lower > meta.upper) throw new Error(`The bounds of ${name} are impossible: Min (${meta.lower}) is above Max (${meta.upper}), in SI.`);
+            state[name] = meta.guess;
+        });
         Interp.used = false; Interp.lenient = true;
 
         // Partition system into sequentially solvable single blocks and coupled simultaneous blocks
@@ -525,6 +528,68 @@ class BoundedSolver {
 // ==========================================
 // 5. PARAMETRIC SWEEP CONTROLLER
 // ==========================================
+// Definite integrals: integral(expression, x, a, b). Adaptive Gauss-Kronrod quadrature, the 7-point Gauss and 15-point
+// Kronrod rule of QUADPACK (Piessens et al., 1983), refining the subinterval with the largest error estimate until the
+// estimate is below 1e-10 of the result (or 1e-13 of the integral of |f|). Infinite limits by x = a + t/(1 - t) and the like.
+class Quadrature {
+    static XK = [0.991455371120812639206854697526329, 0.949107912342758524526189684047851, 0.864864423359769072789712788640926,
+        0.741531185599394439863864773280788, 0.586087235467691130294144845693013, 0.405845151377397166906606412076961,
+        0.207784955007898467600689403773245, 0];
+    static WK = [0.022935322010529224963732008058970, 0.063092092629978553290700663189204, 0.104790010322250183839876322541518,
+        0.140653259715525918745189590510238, 0.169004726639267902826583426598550, 0.190350578064785409913256402421014,
+        0.204432940075298892414161999234649, 0.209482141084727828012999174891714];
+    static WG = [0.129484966168869693270611432679082, 0.279705391489276667901467771423780, 0.381830050505118944950369775488975,
+        0.417959183673469387755102040816327];   // Gauss weights at XK[1], XK[3], XK[5], XK[7]
+    static MAXSUB = 2000;
+    static rule(f, a, b) {
+        const Q = Quadrature, c = (a + b) / 2, h = (b - a) / 2;
+        let k = 0, g = 0, ab = 0;
+        for (let i = 0; i < 8; i++) {
+            const ys = i === 7 ? [f(c)] : [f(c - h * Q.XK[i]), f(c + h * Q.XK[i])];
+            const y = ys.reduce((s, v) => s + v, 0);
+            k += Q.WK[i] * y; ab += Q.WK[i] * ys.reduce((s, v) => s + Math.abs(v), 0);
+            if (i % 2 === 1) g += Q.WG[(i - 1) / 2] * y;
+        }
+        return { a, b, I: k * h, err: Math.abs((k - g) * h), abs: ab * Math.abs(h) };
+    }
+    static integrate(f0, a, b) {
+        if (a === b) return 0;
+        if (a > b) return -Quadrature.integrate(f0, b, a);
+        let f = f0, lo = a, hi = b;
+        if (a === -Infinity && b === Infinity) return Quadrature.integrate(f0, -Infinity, 0) + Quadrature.integrate(f0, 0, Infinity);
+        if (b === Infinity) { f = (t) => f0(a + t / (1 - t)) / ((1 - t) * (1 - t)); lo = 0; hi = 1; }
+        else if (a === -Infinity) { f = (t) => f0(b - (1 - t) / t) / (t * t); lo = 0; hi = 1; }
+        const parts = [Quadrature.rule(f, lo, hi)];
+        for (let n = 0; ; n++) {
+            const I = parts.reduce((s, p) => s + p.I, 0), err = parts.reduce((s, p) => s + p.err, 0), abs = parts.reduce((s, p) => s + p.abs, 0);
+            if (err <= Math.max(1e-10 * Math.abs(I), 1e-13 * abs)) return I;
+            if (n >= Quadrature.MAXSUB) throw new Error(`integral(): no convergence after ${n} subdivisions (estimated error ${err.toPrecision(3)} in ${I.toPrecision(6)}); the integrand may be singular or oscillate`);
+            let w = 0;
+            parts.forEach((p, i) => { if (p.err > parts[w].err) w = i; });
+            const p = parts[w], m = (p.a + p.b) / 2;
+            parts.splice(w, 1, Quadrature.rule(f, p.a, m), Quadrature.rule(f, m, p.b));
+        }
+    }
+    // The math.js function: it gets the expression unevaluated and evaluates it with the dummy variable set
+    static fn(args, math, scope) {
+        const [ex, x, aN, bN] = args, name = x.name, code = ex.compile();
+        const a = aN.compile().evaluate(scope), b = bN.compile().evaluate(scope);
+        if (typeof a !== 'number' || typeof b !== 'number' || Number.isNaN(a) || Number.isNaN(b)) throw new Error('integral(): the limits a and b must be numbers');
+        let xv = 0;
+        const keys = () => { const s = new Set(scope.keys()); s.add(name); return s.values(); };   // an integral inside copies the scope by its keys
+        const sub = { get: (k) => k === name ? xv : scope.get(k), has: (k) => k === name || scope.has(k), set: (k, v) => scope.set(k, v), keys };
+        const shown = (typeof UserFunctions !== 'undefined' && UserFunctions.ivNames.get(name)) || name;
+        return Quadrature.integrate((t) => {
+            xv = t;
+            const y = code.evaluate(sub);
+            if (typeof y !== 'number' || !Number.isFinite(y)) throw new Error(`integral(): the expression is ${typeof y === 'number' ? y : 'not a number'} at ${shown} = ${t}`);
+            return y;
+        }, a, b);
+    }
+}
+Quadrature.fn.rawArgs = true;
+if (typeof math !== 'undefined') math.import({ integral: Quadrature.fn }, { override: true });
+
 class ParametricController {
     constructor(parser, solverClass) {
         this.parser = parser;

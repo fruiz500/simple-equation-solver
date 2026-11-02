@@ -110,6 +110,7 @@ class UnitConsistencyChecker {
         s: 'J/(kg K)', entropy: 'J/(kg K)', d: 'kg/m^3', density: 'kg/m^3',
         u: 'J/kg', internalenergy: 'J/kg', q: '', quality: '', x: '', v: 'm^3/kg', specificvolume: 'm^3/kg'
     };
+    static NH3_DIM = { t: 'K', p: 'Pa', x: '', q: '', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', xl: '', yv: '' };   // nh3h2o() keys and outputs
     static HA_DIM = { T: 'K', Tdb: 'K', B: 'K', Twb: 'K', D: 'K', Tdp: 'K', P: 'Pa', R: '', RH: '', W: '', Omega: '' };
     static NAMED = ['Pa', 'J', 'W', 'N', 'J/kg', 'J/(kg K)', 'W/(m K)', 'W/(m^2 K)', 'W/m^2', 'W/m^3', 'Pa s',
         'kg/m^3', 'm^3/kg', 'm/s', 'm^2/s', 'm^2', 'm^3', 'kg/s', 'm^3/s', 'J/K', 'W/K', 'K/W',
@@ -213,10 +214,12 @@ class UnitConsistencyChecker {
         } else if (spec.kind === 'exergy') {
             if (rest === 4) expected.push([1, 'K'], [2, 'Pa'], [3, 'K'], [4, 'Pa']);
             else if (rest === 6) { keyed(1, 2, U.KEY_DIM); keyed(3, 4, U.KEY_DIM); expected.push([5, 'K'], [6, 'Pa']); }
-        } else if (spec.kind === 'igmix') {
-            expected.push([0, ''], [1, ''], [2, 'K']);
+        } else if (spec.kind === 'igmix' || spec.kind === 'libr') {   // no species or fluid name: the units start at the first argument
+            spec.argUnits.forEach((u, i) => { if (i < args.length) expected.push([i, u]); });
         } else if (spec.kind === 'ha') {
             keyed(1, 2, U.HA_DIM, true); keyed(3, 4, U.HA_DIM, true); keyed(5, 6, U.HA_DIM, true);
+        } else if (spec.kind === 'nh3') {
+            keyed(1, 2, U.NH3_DIM); keyed(3, 4, U.NH3_DIM); keyed(5, 6, U.NH3_DIM);
         }
         if (spec.kind === 'ig') (spec.argUnits || []).forEach((u, i) => { if (i < rest) expected.push([i + 1, u]); });
         expected.forEach(([i, u]) => {
@@ -307,6 +310,15 @@ class UnitConsistencyChecker {
             }
         }
 
+        if (node.isFunctionNode && node.fn.name === 'integral' && node.args.length === 4) {
+            // integral(f, x, a, b): x has the units of the limits, which must agree; the result is [f] times [x]
+            const [f, x, a, b] = node.args, da = U.dimOf(a, ctx), db = U.dimOf(b, ctx);
+            if (U.isDim(da) && U.isDim(db) && !U.same(da, db)) U.report(ctx, `integral() limits in different units, [${U.nameFor(da.d)}] and [${U.nameFor(db.d)}], in '${node.toString()}'`);
+            const dx = U.isDim(da) ? da : (U.isDim(db) ? db : U.UNK);
+            if (U.isDim(dx)) { ctx.registered.add(x.name); ctx.dims.set(x.name, dx); }
+            const df = U.dimOf(f, ctx);
+            return U.isDim(dx) ? U.mulDims([df, dx], [1, 1]) : (df.k === 'lit' ? U.LIT : U.UNK);
+        }
         if (node.isFunctionNode) {
             const name = node.fn.name, lname = name.toLowerCase();
             const tspec = ThermoEngine.FUNCS[lname];
@@ -316,6 +328,10 @@ class UnitConsistencyChecker {
                     const k0 = node.args[0];
                     const c = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? IdealGas.constantInfo(k0.value) : null;
                     return c ? U.mk(U.dimsOfUnit(c.unit)) : U.UNK;
+                }
+                if (tspec.kind === 'nh3') {   // the unit of the output named first
+                    const k0 = node.args[0], u = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? U.NH3_DIM[k0.value.trim().toLowerCase()] : undefined;
+                    return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
                 }
                 if (tspec.kind === 'props' || tspec.kind === 'props1' || tspec.kind === 'ha') return U.UNK;
                 return U.mk(U.dimsOfUnit(tspec.unit));
