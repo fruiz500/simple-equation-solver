@@ -210,6 +210,11 @@ class UnitConsistencyChecker {
             else if (rest === 2) keyed(1, 2, U.KEY_DIM);
         } else if (spec.kind === 'props') {
             keyed(2, 3, U.KEY_DIM); keyed(4, 5, U.KEY_DIM);
+        } else if (spec.kind === 'exergy') {
+            if (rest === 4) expected.push([1, 'K'], [2, 'Pa'], [3, 'K'], [4, 'Pa']);
+            else if (rest === 6) { keyed(1, 2, U.KEY_DIM); keyed(3, 4, U.KEY_DIM); expected.push([5, 'K'], [6, 'Pa']); }
+        } else if (spec.kind === 'igmix') {
+            expected.push([0, ''], [1, ''], [2, 'K']);
         } else if (spec.kind === 'ha') {
             keyed(1, 2, U.HA_DIM, true); keyed(3, 4, U.HA_DIM, true); keyed(5, 6, U.HA_DIM, true);
         }

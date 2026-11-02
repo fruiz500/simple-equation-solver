@@ -33,8 +33,8 @@
     <div class="container">
         <!-- Panel 1: Code/Equations Editor -->
         <div class="panel" id="editor-panel">
-            <h2>Equations <span id="thermo-status" style="font-size:11px; font-weight:normal; color:#c00;">Thermo:
-                    CoolProp not loaded</span><span id="cursor-pos" style="float:right; font-size:11px; font-weight:normal; color:#888;"></span></h2>
+            <h2>Equations <span id="thermo-status" title="The CoolProp property library must load before fluid properties can be used" style="font-size:11px; font-weight:normal; color:#c00;">Thermo:
+                    CoolProp not loaded</span><span id="cursor-pos" title="Line and column of the cursor" style="float:right; font-size:11px; font-weight:normal; color:#888;"></span></h2>
             <div id="find-bar" class="find-bar" hidden>
                 <input id="find-text" type="text" placeholder="Find" spellcheck="false" autocomplete="off" title="Enter: next, Shift+Enter: previous, Esc: close">
                 <input id="replace-text" type="text" placeholder="Replace with" spellcheck="false" autocomplete="off" title="Enter: replace and go to the next">
@@ -42,51 +42,23 @@
                 <label title="Whole words only"><input type="checkbox" id="find-word"> Word</label>
                 <button id="find-prev" class="small" title="Previous (Shift+Enter)">&uarr;</button>
                 <button id="find-next" class="small" title="Next (Enter)">&darr;</button>
-                <button id="find-replace" class="small">Replace</button>
-                <button id="find-all" class="small">Replace all</button>
+                <button id="find-replace" class="small" title="Replace this match and go to the next">Replace</button>
+                <button id="find-all" class="small" title="Replace every match (Ctrl+Z undoes it)">Replace all</button>
                 <span id="find-count"></span>
                 <span class="modal-close" id="find-close" title="Close (Esc)">&times;</span>
             </div>
             <div id="editor-wrap"><div id="editor-gutter" title="Click a number to select that line"><div></div></div><div id="editor-box"><div id="editor-marks"><div></div></div>
-            <textarea id="editor" spellcheck="false">
-// SES Demo
-// 1. Direct substitution & arrays
-x[1] = 5
-x[2] = x[1] * 2
-
-// 2. Coupled nonlinear system (Requires Solver)
-a + b = 10
-a - b = 2
-
-// 3. Thermodynamic Properties (Flexible inputs)
-// 2-parameter shorthand defaults to T and P
-h_1 = enthalpy('water', 300, 101325) 
-// 4-parameter key-value explicit specification
-s_1 = entropy('water', 'T', 300, 'P', 101325) 
-
-// 4. Matrix Operations
-A = [1, 2; 3, 4]
-B = inv(A)
-C = A * B
-
-// 5. Differential Equations (RK45 Numerical Integration)
-[t, y_ode] = ode45(@(t,y) -0.5 * y, [0, 10], 5)
-
-//6. Optimization
-// Free variable bound range: [-4, 4]
-// Target: Maximize or Minimize y
-y = z^3 - 12 * z + 12
-z = 0
-            </textarea></div></div>
+            <textarea id="editor" spellcheck="false"
+                placeholder="Equations go here, one per line, in any order; then Solve.&#10;&#10;T_1 = 300 [K]                     // a value and its unit&#10;P_1 = 101.325 [kPa]               // converted to SI&#10;h_1 = enthalpy('water', T_1, P_1) // a property&#10;a + b = 10; a - b = 2             // two on one line&#10;x^2 = a + 3                       // may need a Guess&#10;&#10;// starts a comment. Help has the rest."></textarea></div></div>
             <div style="display: flex; gap: 10px;">
-                <button id="btn-solve">Solve</button>
-                <button id="btn-optimize" class="green">Min/Max</button>
+                <button id="btn-solve" title="Solve the equations and show the results in the Variables pane">Solve</button>
+                <button id="btn-optimize" class="green" title="Find the minimum or maximum of a variable by varying the free variables">Min/Max</button>
                 <button id="btn-check-units" class="gray" title="Check the syntax, count the equations and variables, and check the units">Check</button>
                 <button id="btn-load" class="secondary" title="Open equations from a text file">Open...</button>
                 <button id="btn-save" class="secondary" title="Save the equations to a text file">Save...</button>
                 <button id="btn-find" class="secondary" title="Find and replace in the equations (Ctrl+F, Ctrl+H)">Find...</button>
                 <input type="file" id="file-load" style="display:none">
-                <button id="btn-help" class="teal" style="order: 99; margin-left: auto;"
+                <button id="btn-help" class="teal" title="Open the help page in a new tab" style="order: 99; margin-left: auto;"
                     onclick="window.open('help.html', '_blank')">Help</button>
             </div>
         </div>
@@ -110,11 +82,11 @@ z = 0
                     title="Export the table to a text file">Export...</button>
             </div>
             <div class="param-controls">
-                <label>Var: <select id="param-var" style="width:90px;"></select></label>
-                <label>Start: <input type="number" id="param-start" value="1"></label>
-                <label>End: <input type="number" id="param-end" value="10"></label>
-                <label>Steps: <input type="number" id="param-steps" value="10"></label>
-                <button id="btn-run-table" style="padding:4px 8px; font-size:var(--fs-small);">Run Table</button>
+                <label title="Variable to sweep (comment out the equation that fixes it)">Var: <select id="param-var" style="width:90px;"></select></label>
+                <label title="First value, in the variable's unit">Start: <input type="number" id="param-start" value="1"></label>
+                <label title="Last value, in the variable's unit">End: <input type="number" id="param-end" value="10"></label>
+                <label title="Number of rows, first and last included">Steps: <input type="number" id="param-steps" value="10"></label>
+                <button id="btn-run-table" title="Solve once for each row and fill the table" style="padding:4px 8px; font-size:var(--fs-small);">Run Table</button>
             </div>
             <div id="parametric-container"></div>
         </div>
@@ -124,24 +96,25 @@ z = 0
             <h2>Console</h2>
             <pre id="console-output"></pre>
             <input id="console-input" type="text" spellcheck="false" autocomplete="off"
+                title="Calculate an expression: Enter runs it, the up and down arrows recall earlier lines"
                 placeholder="> expression, Enter (e.g. enthalpy('water', 300, 101325), derivative(x^3 - 12*x, x), 5 ft to m)">
         </div>
 
         <!-- Panel 5: Plotly Interactive Chart -->
         <div class="panel" id="plot-panel">
             <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
-                <h2>Plot Control</h2>
+                <h2>Plot</h2>
                 <div style="display: flex; gap: 6px; align-items: center;">
-                    <button id="btn-clear-plot" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);">Clear Plot</button>
+                    <button id="btn-clear-plot" class="secondary" title="Remove all curves" style="padding:2px 8px; font-size:var(--fs-small);">Clear Plot</button>
                     <button id="btn-save-image" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
                         title="Save the plot, without these controls, as a PNG or SVG image">Save image...</button>
                 </div>
             </div>
             <div class="parametric-controls"
                 style="margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                <label>X: <select id="plot-x-select"></select></label>
-                <label>Y: <select id="plot-y-select"></select></label>
-                <label>Type:
+                <label title="Column for the horizontal axis">X: <select id="plot-x-select"></select></label>
+                <label title="Column for the vertical axis">Y: <select id="plot-y-select"></select></label>
+                <label title="How the points are drawn">Type:
                     <select id="plot-type-select">
                         <option value="lines+markers">Line + Markers</option>
                         <option value="lines">Line Only</option>
@@ -151,22 +124,22 @@ z = 0
                 </label>
                 <!-- Combined Overlay checkbox and Replot button into a unified inline flex container -->
                 <div style="display: flex; align-items: center; gap: 6px;">
-                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer;">
+                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer;" title="Add the next curve instead of replacing the plot">
                         <input type="checkbox" id="plot-overlay-check"> Overlay
                     </label>
-                    <button id="btn-update-plot" style="padding:3px 8px; font-size:var(--fs-small);">Replot</button>
+                    <button id="btn-update-plot" title="Draw the plot again with these choices" style="padding:3px 8px; font-size:var(--fs-small);">Replot</button>
                 </div>
             </div>
             <div style="margin-top: 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" id="plot-logx"> log x</label>
-                <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" id="plot-logy"> log y</label>
-                <label>Line:
+                <label style="display: flex; align-items: center; gap: 3px;" title="Logarithmic horizontal axis"><input type="checkbox" id="plot-logx"> log x</label>
+                <label style="display: flex; align-items: center; gap: 3px;" title="Logarithmic vertical axis"><input type="checkbox" id="plot-logy"> log y</label>
+                <label title="Straight segments between the points, or a smooth curve through them">Line:
                     <select id="plot-line">
                         <option value="linear">Straight</option>
                         <option value="spline">Smooth</option>
                     </select>
                 </label>
-                <label>Colors:
+                <label title="Light (for reports) or dark plot colors">Colors:
                     <select id="plot-theme">
                         <option value="light">Light</option>
                         <option value="dark">Dark</option>
@@ -186,7 +159,7 @@ z = 0
         <div class="modal-content">
             <div class="modal-header">
                 <span id="inspector-title">Variable Inspector</span>
-                <span class="modal-close" id="inspector-close">&times;</span>
+                <span class="modal-close" id="inspector-close" title="Close (Esc)">&times;</span>
             </div>
             <div class="modal-body" id="inspector-body"></div>
         </div>
@@ -198,29 +171,29 @@ z = 0
         <div class="modal-content" style="max-width: 340px;">
             <div class="modal-header">
                 <span>Save plot image</span>
-                <span class="modal-close" id="image-close">&times;</span>
+                <span class="modal-close" id="image-close" title="Close (Esc)">&times;</span>
             </div>
             <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; font-family: sans-serif; font-size: 14px;">
-                <label><strong>Format:</strong><br>
+                <label title="PNG is a picture; SVG is a vector drawing, sharp at any size"><strong>Format:</strong><br>
                     <select id="img-format" style="width: 100%; padding: 4px;">
                         <option value="png">PNG (picture)</option>
                         <option value="svg">SVG (vector: sharp at any size)</option>
                     </select>
                 </label>
                 <div style="display: flex; gap: 10px;">
-                    <label style="flex: 1;"><strong>Width (px):</strong><br>
+                    <label style="flex: 1;" title="Image width in pixels"><strong>Width (px):</strong><br>
                         <input type="number" id="img-width" min="100" max="4000" style="width: 100%; padding: 4px;"></label>
-                    <label style="flex: 1;"><strong>Height (px):</strong><br>
+                    <label style="flex: 1;" title="Image height in pixels"><strong>Height (px):</strong><br>
                         <input type="number" id="img-height" min="100" max="4000" style="width: 100%; padding: 4px;"></label>
                 </div>
-                <label><strong>Resolution (PNG):</strong><br>
+                <label title="More pixels per inch, for print (PNG only)"><strong>Resolution (PNG):</strong><br>
                     <select id="img-scale" style="width: 100%; padding: 4px;">
                         <option value="1">1x (as on screen)</option>
                         <option value="2" selected>2x</option>
                         <option value="3">3x (for print)</option>
                     </select>
                 </label>
-                <button id="btn-image-ok">Save...</button>
+                <button id="btn-image-ok" title="Choose where to save the image">Save...</button>
             </div>
         </div>
     </div>
@@ -229,20 +202,20 @@ z = 0
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
                 <span>Optimization (Min/Max)</span>
-                <span class="modal-close" id="optimize-close">&times;</span>
+                <span class="modal-close" id="optimize-close" title="Close (Esc)">&times;</span>
             </div>
             <!-- Direction and target; free variables with their bounds (from the Variables pane, editable here only) -->
             <div class="modal-body"
                 style="display: flex; flex-direction: column; gap: 12px; font-family: sans-serif; font-size: 14px;">
                 <div style="display: flex; gap: 10px;">
-                    <label style="flex: 1;">
+                    <label style="flex: 1;" title="Maximize or minimize the target">
                         <strong>Direction:</strong><br>
                         <select id="opt-direction" style="width: 100%; padding: 4px;">
                             <option value="max">Maximize</option>
                             <option value="min">Minimize</option>
                         </select>
                     </label>
-                    <label style="flex: 2;">
+                    <label style="flex: 2;" title="The variable to maximize or minimize">
                         <strong>Target Variable (Objective):</strong><br>
                         <!-- Populated dynamically with all parsed variables -->
                         <select id="opt-target" style="width: 100%; padding: 4px;"></select>
@@ -253,7 +226,7 @@ z = 0
                     <div id="opt-free-list" style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; margin-top: 4px;"></div>
                     <div style="font-size: 12px; color: #555; margin-top: 3px;">Min and Max start from the Variables pane; changes here apply to Min/Max only.</div>
                 </div>
-                <label>
+                <label title="Search method; the default suits most problems">
                     <strong>Algorithm:</strong><br>
                     <select id="opt-algo" style="width: 100%; padding: 4px;">
                         <option value="auto">BFGS quasi-Newton (Brent for one variable)</option>
@@ -261,12 +234,12 @@ z = 0
                         <option value="golden">Golden section (one variable)</option>
                     </select>
                 </label>
-                <label style="display: flex; gap: 6px; align-items: flex-start; font-size: 13px;">
+                <label style="display: flex; gap: 6px; align-items: flex-start; font-size: 13px;" title="Search from several starting points">
                     <input type="checkbox" id="opt-multistart" style="margin-top: 3px;">
                     <span><strong>Multistart:</strong> also start from 7 more points spread over the bounds, keep the best, and list
                         the different optima found (about 8 times slower)</span>
                 </label>
-                <button id="btn-run-optimization" class="green" style="margin-top: 10px;">Run
+                <button id="btn-run-optimization" class="green" title="Start the search" style="margin-top: 10px;">Run
                     Optimization</button>
             </div>
         </div>

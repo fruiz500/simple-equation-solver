@@ -305,12 +305,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const table = document.createElement('table');
 
         table.innerHTML = `<thead><tr style="background:#eee; text-align:left;">
-            <th style="padding:4px;">Var</th>
-            <th style="padding:4px;">Guess</th>
-            <th style="padding:4px;">Min</th>
-            <th style="padding:4px;">Max</th>
-            <th style="padding:4px;">Unit</th>
-            <th style="padding:4px;">Value</th></tr></thead><tbody></tbody>`;
+            <th style="padding:4px;" title="Variable name">Var</th>
+            <th style="padding:4px;" title="Starting value for the solver">Guess</th>
+            <th style="padding:4px;" title="Lower bound (blank: none)">Min</th>
+            <th style="padding:4px;" title="Upper bound (blank: none)">Max</th>
+            <th style="padding:4px;" title="Unit for display and input (blank: SI; the gray text is the unit Check found)">Unit</th>
+            <th style="padding:4px;" title="Result of the last Solve or Min/Max (click a magnifier to see an array)">Value</th></tr></thead><tbody></tbody>`;
 
         const tbody = table.querySelector('tbody');
         displayOrder([...variablesMap.keys()]).forEach((name) => {
@@ -333,10 +333,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             tr.innerHTML = `<td style="padding:2px; font-weight:bold;">${name}</td>
-                <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.guess))}" data-var="${name}" data-field="guess" style="width:100px; text-align:center;"></td>
-                <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.lower))}" placeholder="-inf" data-var="${name}" data-field="lower" style="width:100px; text-align:center;"></td>
-                <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" style="width:100px; text-align:center;"></td>
-                <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${meta.inferredUnit || '[-]'}" data-var="${name}" data-field="unit" style="width:100px; text-align:center;"></td>
+                <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.guess))}" data-var="${name}" data-field="guess" title="Starting value of ${name} for the solver" style="width:100px; text-align:center;"></td>
+                <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.lower))}" placeholder="-inf" data-var="${name}" data-field="lower" title="Lower bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
+                <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" title="Upper bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
+                <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${meta.inferredUnit || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input" style="width:100px; text-align:center;"></td>
                 <td class="val" style="padding:2px 4px;">${solvedDisplay}</td>`;
             tbody.appendChild(tr);
         });
@@ -750,7 +750,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // --- Plot Control Logic ---
+    // --- Plot pane logic ---
     const plotXSelect = document.getElementById('plot-x-select');
     const plotYSelect = document.getElementById('plot-y-select');
     const plotTypeSelect = document.getElementById('plot-type-select');

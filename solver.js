@@ -191,9 +191,15 @@ class BoundedSolver {
         const blocks = this.partitionEquations();
 
         for (const block of blocks) {
-            if (block.type === 'single') this.solveSingleEquation(block.eqIndex, state, block.targetVar);
-            else if (block.type === 'simultaneous') this.solveSimultaneousBlock(block.eqIndices, block.vars, state);
-            else if (block.type === 'check') this.checkEquation(block.eqIndex, state);
+            try {
+                if (block.type === 'single') this.solveSingleEquation(block.eqIndex, state, block.targetVar);
+                else if (block.type === 'simultaneous') this.solveSimultaneousBlock(block.eqIndices, block.vars, state);
+                else if (block.type === 'check') this.checkEquation(block.eqIndex, state);
+            } catch (e) {   // a message that names no line (a function given wrong arguments, say) gets the block's lines
+                if (/\b[Ll]ines? \d|^ode block/.test(e.message)) throw e;
+                const where = this.eqLabel(block.eqIndices || block.eqIndex);
+                throw new Error(where ? `${where[0].toUpperCase()}${where.slice(1)}: ${e.message}` : e.message);
+            }
         }
         // interpolate(): values outside a table are an error, and extrapolation is reported, at the solution only
         // (while iterating, trial values may leave the table, so the end segments are extended quietly)
@@ -341,7 +347,7 @@ class BoundedSolver {
         const z = t === 'Complex' ? val : list ? list.flat(Infinity).find(v => math.typeOf(v) === 'Complex') : undefined;
         if (z === undefined) return;
         throw new Error(`${this.eqLabel(eqIndex).replace(/^l/, 'L')}: ${t === 'Complex' ? name + ' comes out as' : 'an element of ' + name + ' is'} the complex number ${math.format(z, { precision: 6 })}, ` +
-            `for example from the square root or logarithm of a negative number. Complex numbers are not supported.`);
+            `for example from the square root or logarithm of a negative number. Complex numbers are not supported in the equations; for a complex calculation, use the console line below the Console.`);
     }
 
     // Sets a variable in an equation scope, including its slot in the array that x[k] expressions read

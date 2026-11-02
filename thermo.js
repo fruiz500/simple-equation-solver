@@ -15,6 +15,9 @@ const IG_FUNCS = {
     ig_gibbs: { key: '', unit: 'J/mol', kind: 'ig', argUnits: ['K', 'Pa'], desc: "Molar Gibbs energy h - T s of an ideal gas at 1 bar, or at pressure P: ig_gibbs('CO2', T) or ig_gibbs('CO2', T, P)" },
     ig_cp: { key: '', unit: 'J/(mol K)', kind: 'ig', argUnits: ['K'], desc: "Molar heat capacity at constant pressure of an ideal gas: ig_cp('CO2', T)" },
     ig_formationenthalpy: { key: '', unit: 'J/mol', kind: 'ig', argUnits: [], desc: "Enthalpy of formation at 298.15 K: ig_formationenthalpy('CO2')" },
+    ig_exergy: { key: '', unit: 'J/mol', kind: 'ig', argUnits: ['K', 'Pa', 'K', 'Pa'], desc: "Physical flow exergy of an ideal gas, h - h0 - T0 (s - s0), dead state T0, P0: ig_exergy('CO2', T, P, T0, P0)" },
+    ig_chemicalexergy: { key: '', unit: 'J/mol', kind: 'ig', argUnits: ['K', 'Pa'], desc: "Chemical exergy of a species of C, H, O and N, from its reaction with the reference atmosphere: ig_chemicalexergy('CH4') (298.15 K, 1 atm) or ig_chemicalexergy('CH4', T0, P0), optionally followed by mole fractions that differ from the default atmosphere, such as 'CO2', 0.0004" },
+    ig_mixingexergy: { key: '', unit: 'J/mol', kind: 'igmix', argUnits: ['', '', 'K'], desc: "Exergy of an ideal-gas component at mole fraction y relative to y0 in the environment, R T0 ln(y/y0): ig_mixingexergy(y, y0, T0)" },
     ig_molarmass: { key: '', unit: 'kg/mol', kind: 'ig', argUnits: [], desc: "Molar mass of an ideal-gas species, in kg per mol: ig_molarmass('CO2')" },
     constant: { key: '', unit: '', kind: 'phys', desc: "Physical constant by name, in SI: constant('sigma'), constant('gravity'), ..." }
 };
@@ -257,6 +260,16 @@ class IdealGas {
         return c.value;
     }
 
+    // Reference atmosphere for chemical exergy: Moran and Shapiro, Fundamentals of Engineering Thermodynamics, Sec. 13.6
+    // and Table 13.4: T0 = 298.15 K, p0 = 1 atm, ideal gas of N2 75.67 %, O2 20.35 %, H2O(g) 3.12 %, CO2 0.03 %, other 0.83 % (molar)
+    static ENV = { N2: 0.7567, O2: 0.2035, H2O: 0.0312, CO2: 0.0003 };
+    // Atoms of a species from its formula key: 'nC4H10' -> { C: 4, H: 10 }, 'CH3OCH3' -> { C: 2, H: 6, O: 1 }
+    static formula(key) {
+        const f = key.replace(/^[ni](?=[A-Z])/, ''), atoms = {};
+        for (const m of f.matchAll(/([A-Z][a-z]?)(\d*)/g)) atoms[m[1]] = (atoms[m[1]] || 0) + (m[2] ? +m[2] : 1);
+        return atoms;
+    }
+
     static _sIndex = null;
     static species(name) {
         if (!IdealGas._sIndex) {
@@ -287,8 +300,49 @@ class IdealGas {
     static evaluate(name, args) {
         const R = IdealGas.R;
         const num = (x, what) => { const v = Number(x); if (typeof x === 'object' || !Number.isFinite(v)) throw new Error(`${name}(): ${what} must be a number, got '${x}'`); return v; };
+        if (name === 'ig_mixingexergy') {
+            if (args.length !== 3) throw new Error('ig_mixingexergy(): use ig_mixingexergy(y, y0, T0)');
+            const y = num(args[0], 'y'), y0 = num(args[1], 'y0'), T0 = num(args[2], 'T0');
+            if (!(y > 0 && y <= 1 && y0 > 0 && y0 <= 1)) throw new Error('ig_mixingexergy(): the mole fractions y and y0 must be above 0 and at most 1');
+            if (!(T0 > 0)) throw new Error('ig_mixingexergy(): T0 must be positive (K)');
+            return R * T0 * Math.log(y / y0);
+        }
         if (args.length < 1) throw new Error(`${name}(): the first argument is the species, for example ${name}('CO2', T)`);
         const sp = IdealGas.species(args[0]);
+        if (name === 'ig_exergy') {   // physical: from T, P to the dead state T0, P0
+            if (args.length !== 5) throw new Error("ig_exergy(): use ig_exergy('species', T, P, T0, P0)");
+            const [T, P, T0, P0] = args.slice(1).map((x, i) => num(x, ['T', 'P', 'T0', 'P0'][i]));
+            if (!(T > 0 && P > 0 && T0 > 0 && P0 > 0)) throw new Error('ig_exergy(): T, P, T0 and P0 must be positive (K and Pa)');
+            const f = (fn, ...x) => IdealGas.evaluate(fn, [sp.key, ...x]);
+            return f('ig_enthalpy', T) - f('ig_enthalpy', T0) - T0 * (f('ig_entropy', T, P) - f('ig_entropy', T0, P0));
+        }
+        if (name === 'ig_chemicalexergy') {
+            // Moran and Shapiro, Eq. 13.36: the species reacts with O2 from the atmosphere to CO2, H2O(g) and N2, all at T0, P0,
+            // which then expand to their partial pressures in the atmosphere:
+            // e_ch = g + nO2 g_O2 - c g_CO2 - h/2 g_H2O - n/2 g_N2 + R T0 ln(y_O2^nO2 / (y_CO2^c y_H2O^(h/2) y_N2^(n/2)))
+            if (!(args.length === 1 || (args.length >= 3 && args.length % 2 === 1)))
+                throw new Error("ig_chemicalexergy(): use ig_chemicalexergy('species'), ('species', T0, P0), or ('species', T0, P0, 'CO2', y, ...) for an atmosphere with other mole fractions");
+            const T0 = args.length > 1 ? num(args[1], 'T0') : IdealGas.TREF, P0 = args.length > 1 ? num(args[2], 'P0') : 101325;
+            if (!(T0 > 0 && P0 > 0)) throw new Error('ig_chemicalexergy(): T0 and P0 must be positive (K and Pa)');
+            const env = { ...IdealGas.ENV };
+            for (let k = 3; k < args.length; k += 2) {
+                const g = String(args[k]).trim().toUpperCase();
+                if (!(g in env)) throw new Error(`ig_chemicalexergy(): the gases of the atmosphere that can be set are N2, O2, H2O and CO2, not '${args[k]}'`);
+                const y = num(args[k + 1], `the mole fraction of ${g}`);
+                if (!(y > 0 && y < 1)) throw new Error(`ig_chemicalexergy(): the mole fraction of ${g} must be between 0 and 1`);
+                env[g] = y;
+            }
+            const at = IdealGas.formula(sp.key), other = Object.keys(at).filter(e => !['C', 'H', 'O', 'N'].includes(e));
+            if (other.length) throw new Error(`ig_chemicalexergy(): ${sp.key} contains ${other.join(', ')}; only species made of C, H, O and N are covered, whose reference substances are gases of the atmosphere`);
+            const c = at.C || 0, h = at.H || 0, o = at.O || 0, n = at.N || 0;
+            const gib = (s) => IdealGas.evaluate('ig_gibbs', [s, T0, P0]);
+            let e = gib(sp.key), ln = 0;
+            for (const [s, v] of [['O2', c + h / 4 - o / 2], ['CO2', -c], ['H2O', -h / 2], ['N2', -n / 2]]) {
+                if (v === 0) continue;
+                e += v * gib(s); ln += v * Math.log(env[s]);
+            }
+            return e + R * T0 * ln;
+        }
         if (name === 'ig_molarmass') return sp.rec.M;
         if (name === 'ig_formationenthalpy') { const T = IdealGas.TREF; return IdealGas.hRT(IdealGas._poly(sp, T, name), T) * R * T; }
         if (args.length < 2 || args.length > 3) throw new Error(`${name}(): use ${name}('species', T${name === 'ig_entropy' || name === 'ig_gibbs' ? ' [, P]' : ''})`);
@@ -491,6 +545,9 @@ class ThermoEngine {
         entropy: { key: 'S', unit: 'J/(kg K)', kind: 'state', desc: 'Specific entropy' },
         internalenergy: { key: 'U', unit: 'J/kg', kind: 'state', desc: 'Specific internal energy' },
         gibbsenergy: { key: 'G', unit: 'J/kg', kind: 'state', desc: 'Specific Gibbs energy' },
+        // --- exergy:  name(fluid, T, P, T0, P0)   or   name(fluid, 'key1', v1, 'key2', v2, T0, P0); dead state = the same fluid at T0, P0 ---
+        exergy: { key: '', unit: 'J/kg', kind: 'exergy', desc: 'Flow exergy, h - h0 - T0 (s - s0), dead state T0, P0' },
+        exergy_nonflow: { key: '', unit: 'J/kg', kind: 'exergy', desc: 'Nonflow (closed-system) exergy, u - u0 + P0 (v - v0) - T0 (s - s0), dead state T0, P0' },
         helmholtzenergy: { key: 'Helmholtzmass', unit: 'J/kg', kind: 'state', desc: 'Specific Helmholtz energy' },
         density: { key: 'D', unit: 'kg/m^3', kind: 'state', desc: 'Density' },
         specificvolume: { key: 'V_SPEC', unit: 'm^3/kg', kind: 'state', desc: 'Specific volume (1/density)' },
@@ -600,7 +657,16 @@ class ThermoEngine {
             return Solids.call(name, a);
         }
         if (spec.kind === 'phys') return IdealGas.constant(a);   // these two need no CoolProp
-        if (spec.kind === 'ig') return IdealGas.evaluate(name, a);
+        if (spec.kind === 'ig' || spec.kind === 'igmix') return IdealGas.evaluate(name, a);
+        if (spec.kind === 'exergy') {   // physical exergy relative to the same fluid at T0, P0, through the property functions above
+            if (a.length !== 5 && a.length !== 7) throw new Error(`${name}(): use ${name}(fluid, T, P, T0, P0) or ${name}(fluid, 'key1', v1, 'key2', v2, T0, P0)`);
+            const T0 = ThermoEngine.num(a[a.length - 2], `${name}() T0`), P0 = ThermoEngine.num(a[a.length - 1], `${name}() P0`);
+            if (!(T0 > 0 && P0 > 0)) throw new Error(`${name}(): T0 and P0 must be positive (K and Pa)`);
+            const st = a.slice(1, -2), at = (p, s) => ThermoEngine.call(p, [a[0], ...s]), dead = [T0, P0];
+            const ds = at('entropy', st) - at('entropy', dead);
+            if (name === 'exergy') return at('enthalpy', st) - at('enthalpy', dead) - T0 * ds;
+            return at('internalenergy', st) - at('internalenergy', dead) + P0 * (at('specificvolume', st) - at('specificvolume', dead)) - T0 * ds;
+        }
         const CP = ThermoEngine.CP;
         const check = (v, what) => { if (!Number.isFinite(v)) ThermoEngine.fail(CP, what); return v; };
         const need = (ok, msg) => { if (!ok) throw new Error(`${name}(): ${msg}`); };
