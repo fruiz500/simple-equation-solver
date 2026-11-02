@@ -7,8 +7,18 @@
     padding: 0;
 }
 
+/* Text sizes: --fs-small for controls (labels, selects, small buttons, number boxes), --fs-text for what you read
+   and type (equations, console, variables), --fs-title for pane titles and the main buttons */
+:root {
+    --fs-small: 13px;
+    --fs-text: 15px;
+    --fs-title: 14px;
+    --mono: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+
 body {
     font-family: Arial, sans-serif;
+    font-size: var(--fs-small);
     background-color: #f4f4f9;
     color: #333;
     height: 100vh;
@@ -96,8 +106,13 @@ body {
 }
 
 /* Component Styling */
+select,
+input {
+    font-size: var(--fs-small);
+}
+
 h2 {
-    font-size: 14px;
+    font-size: var(--fs-title);
     margin-bottom: 8px;
     border-bottom: 1px solid #eee;
     padding-bottom: 4px;
@@ -106,8 +121,9 @@ h2 {
 textarea {
     flex-grow: 1;
     resize: none;
-    font-family: monospace;
-    font-size: 14px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+    line-height: 1.4;
     padding: 8px;
     border: 1px solid #ccc;
     border-radius: 4px;
@@ -124,15 +140,142 @@ button {
     border: none;
     border-radius: 4px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: var(--fs-title);
 }
 
 button:hover {
     background-color: #0056b3;
 }
 
+button.small {
+    padding: 2px 8px;
+    font-size: var(--fs-small);
+}
+
+/* Find and Replace: the bar, and the highlights drawn behind the (transparent) editor */
+.find-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.find-bar[hidden] {
+    display: none;
+}
+
+.find-bar input[type="text"] {
+    width: 120px;
+    padding: 2px 6px;
+    font-family: var(--mono);
+}
+
+.find-bar label {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+}
+
+#find-count {
+    color: #555;
+}
+
+#find-close {
+    margin-left: auto;
+    font-size: 16px;
+}
+
+#editor-wrap {
+    flex-grow: 1;
+    display: flex;
+    min-height: 0;
+    margin-bottom: 8px;
+}
+
+#editor-box {
+    position: relative;
+    flex-grow: 1;
+    display: flex;
+    min-width: 0;
+    background: #fff;
+}
+
+#editor-box textarea {
+    margin-bottom: 0;
+    background: transparent;
+    position: relative;
+    border-radius: 0 4px 4px 0;
+}
+
+/* Line numbers: the current line in bold, lines named by an error in red, by a warning in amber */
+#editor-gutter {
+    overflow: hidden;
+    flex: 0 0 auto;
+    background: #f3f3f6;
+    border: 1px solid #ccc;
+    border-right: none;
+    border-radius: 4px 0 0 4px;
+    padding: 8px 6px 8px 8px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+    line-height: 1.4;
+    color: #999;
+    text-align: right;
+    user-select: none;
+    cursor: pointer;
+}
+
+#editor-gutter div.cur {
+    color: #333;
+    font-weight: bold;
+}
+
+#editor-gutter div.warn {
+    background: #ffe2a8;
+    color: #7a4500;
+}
+
+#editor-gutter div.err {
+    background: #f8c4c4;
+    color: #a00;
+}
+
+#editor-marks {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border: 1px solid transparent;
+    padding: 8px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+    line-height: 1.4;
+    white-space: pre;
+    color: transparent;
+    pointer-events: none;
+}
+
+#editor-marks mark {
+    color: transparent;
+    background: #fff0a0;
+    border-radius: 2px;
+}
+
+#editor-marks mark.cur {
+    background: #ffb347;
+}
+
+/* Colored buttons, each with a darker shade on hover */
+button.green { background-color: #28a745; }
+button.green:hover { background-color: #1e7e34; }
+button.gray { background-color: #6c757d; }
+button.gray:hover { background-color: #545b62; }
+button.teal { background-color: #17a2b8; }
+button.teal:hover { background-color: #117a8b; }
+
 #console-output .lineref {
-    color: #9cdcfe;
+    color: #0056b3;
     text-decoration: underline;
     cursor: pointer;
 }
@@ -142,19 +285,41 @@ button:hover {
     padding: 4px 8px;
     border: 1px solid #ccc;
     border-radius: 4px;
-    font-family: monospace;
-    font-size: 12px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
 }
 
 #console-output {
     flex-grow: 1;
-    background: #1e1e1e;
-    color: #00ff00;
+    background: #fafafa;
+    color: #1a1a1a;
+    border: 1px solid #ccc;
+    border-radius: 4px;
     padding: 8px;
     overflow-y: auto;
-    font-family: monospace;
-    font-size: 12px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
     white-space: pre-wrap;
+}
+
+#console-output .con-error { color: #c00; }
+#console-output .con-warn { color: #a05a00; }
+
+/* Variables pane */
+#variables-container table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-text);
+}
+
+#variables-container input {
+    font-size: var(--fs-small);
+}
+
+#variables-container td.val {
+    font-family: var(--mono);
+    font-weight: bold;
+    color: #0056b3;
 }
 
 #plot-container,
@@ -216,7 +381,7 @@ button:hover {
 .modal-body {
     overflow: auto;
     flex-grow: 1;
-    font-family: monospace;
+    font-family: var(--mono);
     font-size: 13px;
 }
 
@@ -235,7 +400,7 @@ table.matrix-table td {
     display: flex;
     gap: 10px;
     margin-bottom: 10px;
-    font-size: 12px;
+    font-size: var(--fs-small);
     align-items: center;
 }
 

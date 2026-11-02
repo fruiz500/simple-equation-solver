@@ -35,6 +35,19 @@
         <div class="panel" id="editor-panel">
             <h2>Equations <span id="thermo-status" style="font-size:11px; font-weight:normal; color:#c00;">Thermo:
                     CoolProp not loaded</span><span id="cursor-pos" style="float:right; font-size:11px; font-weight:normal; color:#888;"></span></h2>
+            <div id="find-bar" class="find-bar" hidden>
+                <input id="find-text" type="text" placeholder="Find" spellcheck="false" autocomplete="off" title="Enter: next, Shift+Enter: previous, Esc: close">
+                <input id="replace-text" type="text" placeholder="Replace with" spellcheck="false" autocomplete="off" title="Enter: replace and go to the next">
+                <label title="Match case"><input type="checkbox" id="find-case"> Aa</label>
+                <label title="Whole words only"><input type="checkbox" id="find-word"> Word</label>
+                <button id="find-prev" class="small" title="Previous (Shift+Enter)">&uarr;</button>
+                <button id="find-next" class="small" title="Next (Enter)">&darr;</button>
+                <button id="find-replace" class="small">Replace</button>
+                <button id="find-all" class="small">Replace all</button>
+                <span id="find-count"></span>
+                <span class="modal-close" id="find-close" title="Close (Esc)">&times;</span>
+            </div>
+            <div id="editor-wrap"><div id="editor-gutter" title="Click a number to select that line"><div></div></div><div id="editor-box"><div id="editor-marks"><div></div></div>
             <textarea id="editor" spellcheck="false">
 // SES Demo
 // 1. Direct substitution & arrays
@@ -64,15 +77,16 @@ C = A * B
 // Target: Maximize or Minimize y
 y = z^3 - 12 * z + 12
 z = 0
-            </textarea>
+            </textarea></div></div>
             <div style="display: flex; gap: 10px;">
                 <button id="btn-solve">Solve</button>
-                <button id="btn-optimize" style="background-color: #28a745;">Min/Max</button>
-                <button id="btn-check-units" style="background-color: #6c757d;">Check Units</button>
+                <button id="btn-optimize" class="green">Min/Max</button>
+                <button id="btn-check-units" class="gray" title="Check the syntax, count the equations and variables, and check the units">Check</button>
                 <button id="btn-load" class="secondary" title="Open equations from a text file">Open...</button>
                 <button id="btn-save" class="secondary" title="Save the equations to a text file">Save...</button>
+                <button id="btn-find" class="secondary" title="Find and replace in the equations (Ctrl+F, Ctrl+H)">Find...</button>
                 <input type="file" id="file-load" style="display:none">
-                <button id="btn-help" style="background-color: #17a2b8; order: 99; margin-left: auto;"
+                <button id="btn-help" class="teal" style="order: 99; margin-left: auto;"
                     onclick="window.open('help.html', '_blank')">Help</button>
             </div>
         </div>
@@ -80,7 +94,10 @@ z = 0
         <!-- Panel 2: Solved Variables Table & Boundary Controls -->
         <div class="panel" id="variables-panel">
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <h2>Variables</h2><button id="btn-export" class="secondary" style="padding:2px 8px; font-size:12px;"
+                <h2>Variables</h2>
+                <label style="margin-left:auto; margin-right:10px; display:flex; align-items:center; gap:3px; cursor:pointer;"
+                    title="After each Solve, Min/Max or table row, the solution becomes the guesses, so the next solve starts from it">
+                    <input type="checkbox" id="update-guesses"> Update guesses</label><button id="btn-export" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
                     title="Export the results to a text file">Export...</button>
             </div>
             <div id="variables-container"></div>
@@ -89,7 +106,7 @@ z = 0
         <!-- Panel 3: Parametric Table Sweep Controls -->
         <div class="panel" id="parametric-panel">
             <div style="display:flex; justify-content:space-between; align-items:center;">
-                <h2>Parametric Table</h2><button id="btn-export-table" class="secondary" style="padding:2px 8px; font-size:12px;"
+                <h2>Parametric Table</h2><button id="btn-export-table" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
                     title="Export the table to a text file">Export...</button>
             </div>
             <div class="param-controls">
@@ -97,7 +114,7 @@ z = 0
                 <label>Start: <input type="number" id="param-start" value="1"></label>
                 <label>End: <input type="number" id="param-end" value="10"></label>
                 <label>Steps: <input type="number" id="param-steps" value="10"></label>
-                <button id="btn-run-table" style="padding:4px 8px; font-size:12px;">Run Table</button>
+                <button id="btn-run-table" style="padding:4px 8px; font-size:var(--fs-small);">Run Table</button>
             </div>
             <div id="parametric-container"></div>
         </div>
@@ -115,8 +132,8 @@ z = 0
             <div class="panel-header" style="display:flex; justify-content:space-between; align-items:center;">
                 <h2>Plot Control</h2>
                 <div style="display: flex; gap: 6px; align-items: center;">
-                    <button id="btn-clear-plot" class="secondary" style="padding:2px 8px; font-size:12px;">Clear Plot</button>
-                    <button id="btn-save-image" class="secondary" style="padding:2px 8px; font-size:12px;"
+                    <button id="btn-clear-plot" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);">Clear Plot</button>
+                    <button id="btn-save-image" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
                         title="Save the plot, without these controls, as a PNG or SVG image">Save image...</button>
                 </div>
             </div>
@@ -134,13 +151,13 @@ z = 0
                 </label>
                 <!-- Combined Overlay checkbox and Replot button into a unified inline flex container -->
                 <div style="display: flex; align-items: center; gap: 6px;">
-                    <label style="display: flex; align-items: center; gap: 3px; font-size: 11px; cursor: pointer;">
+                    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer;">
                         <input type="checkbox" id="plot-overlay-check"> Overlay
                     </label>
-                    <button id="btn-update-plot" style="padding:3px 8px; font-size:11px;">Replot</button>
+                    <button id="btn-update-plot" style="padding:3px 8px; font-size:var(--fs-small);">Replot</button>
                 </div>
             </div>
-            <div style="margin-top: 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px;">
+            <div style="margin-top: 4px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" id="plot-logx"> log x</label>
                 <label style="display: flex; align-items: center; gap: 3px;"><input type="checkbox" id="plot-logy"> log y</label>
                 <label>Line:
@@ -249,7 +266,7 @@ z = 0
                     <span><strong>Multistart:</strong> also start from 7 more points spread over the bounds, keep the best, and list
                         the different optima found (about 8 times slower)</span>
                 </label>
-                <button id="btn-run-optimization" style="margin-top: 10px; background-color: #28a745;">Run
+                <button id="btn-run-optimization" class="green" style="margin-top: 10px;">Run
                     Optimization</button>
             </div>
         </div>

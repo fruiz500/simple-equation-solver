@@ -13,10 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // ==========================================
     // Redirects console.log and console.error messages directly into the UI Console panel
     // Console text is escaped; 'line 12' and 'lines 3, 5' become links that select that line in the editor
-    function appendConsole(text) {
+    function appendConsole(text, cls) {
         const esc = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        consoleOutput.insertAdjacentHTML('beforeend', esc.replace(/\b([Ll]ines?) (\d+(?:, \d+)*)/g, (all, w, nums) =>
-            w + ' ' + nums.split(', ').map(n => `<span class="lineref" data-line="${n}" title="Show line ${n}">${n}</span>`).join(', ')));
+        const html = esc.replace(/\b([Ll]ines?) (\d+(?:, \d+)*)/g, (all, w, nums) =>
+            w + ' ' + nums.split(', ').map(n => `<span class="lineref" data-line="${n}" title="Show line ${n}">${n}</span>`).join(', '));
+        consoleOutput.insertAdjacentHTML('beforeend', cls ? `<span class="${cls}">${html}</span>` : html);
         consoleOutput.scrollTop = consoleOutput.scrollHeight;
     }
     // Line and column of the cursor, next to the Equations title
@@ -38,6 +39,154 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     consoleOutput.addEventListener('click', (e) => { const n = e.target.dataset && e.target.dataset.line; if (n) selectLine(Number(n)); });
 
+    // ---- Line numbers beside the editor. Lines named in an error or a warning ('line 12', 'lines 3, 5') are marked
+    // until the next Solve, Check, table or Min/Max, or until the number of lines changes. Click a number to select the line.
+    const gutter = document.querySelector('#editor-gutter > div');
+    const flagged = new Map();            // line -> 'err' or 'warn'
+    let nLines = 0, curLine = 0;
+    function drawGutter() {
+        const n = editor.value.split('\n').length;
+        if (n !== nLines && nLines) flagged.clear();   // lines moved: the marks would point at the wrong ones
+        nLines = n;
+        curLine = editor.value.slice(0, editor.selectionStart).split('\n').length;
+        let html = '';
+        for (let i = 1; i <= n; i++) {
+            const c = [i === curLine ? 'cur' : '', flagged.get(i) || ''].filter(Boolean).join(' ');
+            html += c ? `<div class="${c}">${i}</div>` : `<div>${i}</div>`;
+        }
+        gutter.innerHTML = html;
+        gutter.style.transform = `translateY(${-editor.scrollTop}px)`;
+    }
+    function flagLines(message, kind) {
+        for (const m of String(message).matchAll(/\b[Ll]ines? (\d+(?:, \d+)*)/g))
+            m[1].split(', ').forEach(k => { if (flagged.get(+k) !== 'err') flagged.set(+k, kind); });
+        drawGutter();
+    }
+    ['input', 'keyup', 'click', 'select', 'focus'].forEach(ev => editor.addEventListener(ev, () => {
+        const n = editor.value.split('\n').length, c = editor.value.slice(0, editor.selectionStart).split('\n').length;
+        if (n !== nLines || c !== curLine) drawGutter();
+    }));
+    editor.addEventListener('scroll', () => { gutter.style.transform = `translateY(${-editor.scrollTop}px)`; });
+    gutter.parentElement.addEventListener('click', (e) => { const n = +e.target.textContent; if (e.target.parentElement === gutter && n) selectLine(n); });
+    ['btn-solve', 'btn-check-units', 'btn-run-table', 'btn-run-optimization'].forEach(id =>
+        document.getElementById(id).addEventListener('click', () => { flagged.clear(); drawGutter(); }));
+    drawGutter();
+
+    // ---- Find and Replace in the Equations pane: Ctrl+F (Cmd+F) or Ctrl+H, or the Find... button ----
+    // A textarea hides its selection while the focus is in the bar, so the matches are drawn in a layer behind it.
+    // Replacements go through the browser's own editing, so Ctrl+Z undoes them.
+    const fb = {};
+    ['bar', 'text', 'count', 'case', 'word'].forEach(k => { fb[k] = document.getElementById(k === 'bar' ? 'find-bar' : 'find-' + k); });
+    fb.repl = document.getElementById('replace-text');
+    const marks = document.querySelector('#editor-marks > div');
+    let found = [], cur = -1, findFrom = 0;
+    function findRegex() {
+        if (!fb.text.value) return null;
+        const esc = fb.text.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(fb.word.checked ? `(?<![A-Za-z0-9_])${esc}(?![A-Za-z0-9_])` : esc, fb.case.checked ? 'g' : 'gi');
+    }
+    const syncMarks = () => { marks.style.transform = `translate(${-editor.scrollLeft}px, ${-editor.scrollTop}px)`; };
+    function drawMarks() {
+        const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        let html = '', at = 0;
+        found.forEach((m, k) => {
+            html += esc(editor.value.slice(at, m[0])) + `<mark${k === cur ? ' class="cur"' : ''}>${esc(editor.value.slice(m[0], m[1]))}</mark>`;
+            at = m[1];
+        });
+        marks.innerHTML = found.length ? html + esc(editor.value.slice(at)) + '\n' : '';
+        syncMarks();
+        fb.count.textContent = !fb.text.value ? '' : found.length ? `${cur + 1} of ${found.length}` : 'no match';
+    }
+    // Finds every match; with 'from', the current one becomes the first at or after that position (wrapping around)
+    function refreshFind(from) {
+        const re = fb.bar.hidden ? null : findRegex();
+        found = re ? [...editor.value.matchAll(re)].map(m => [m.index, m.index + m[0].length]) : [];
+        if (from !== undefined) cur = found.length ? Math.max(0, found.findIndex(m => m[0] >= from)) : -1;
+        else cur = Math.min(cur, found.length - 1);
+        drawMarks();
+    }
+    function showMatch() {
+        if (cur < 0) return;
+        drawMarks();
+        editor.setSelectionRange(found[cur][0], found[cur][1]);   // selected when the editor gets the focus back
+        const el = marks.querySelector('mark.cur');
+        if (el.offsetTop < editor.scrollTop || el.offsetTop + el.offsetHeight > editor.scrollTop + editor.clientHeight)
+            editor.scrollTop = el.offsetTop - editor.clientHeight / 3;
+        if (el.offsetLeft < editor.scrollLeft || el.offsetLeft + el.offsetWidth > editor.scrollLeft + editor.clientWidth)
+            editor.scrollLeft = Math.max(0, el.offsetLeft - editor.clientWidth / 3);
+        syncMarks();
+        showCursor();
+    }
+    function step(d) {
+        refreshFind();
+        if (!found.length) return;
+        cur = cur < 0 ? 0 : (cur + d + found.length) % found.length;
+        showMatch();
+    }
+    function replaceText(a, b, text) {
+        const back = document.activeElement, top = editor.scrollTop, left = editor.scrollLeft;
+        editor.focus(); editor.setSelectionRange(a, b);
+        const done = text ? document.execCommand('insertText', false, text) : document.execCommand('delete');
+        if (!done) { editor.setRangeText(text, a, b, 'end'); editor.dispatchEvent(new Event('input')); }
+        editor.scrollTop = top; editor.scrollLeft = left;
+        if (back && back !== editor) back.focus();
+    }
+    function replaceOne() {
+        refreshFind();
+        if (cur < 0) return;
+        const [a, b] = found[cur];
+        replaceText(a, b, fb.repl.value);
+        refreshFind(a + fb.repl.value.length);
+        showMatch();
+    }
+    function replaceAll() {
+        refreshFind();
+        const n = found.length;
+        if (!n) return;
+        const re = findRegex();
+        replaceText(0, editor.value.length, editor.value.replace(re, () => fb.repl.value));
+        console.log(`Replaced ${n} occurrence${n > 1 ? 's' : ''} of '${fb.text.value}' (Ctrl+Z in the Equations pane undoes this).`);
+        refreshFind(0);
+    }
+    function openFind(toReplace) {
+        const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+        if (sel && !sel.includes('\n')) fb.text.value = sel;
+        fb.bar.hidden = false;
+        findFrom = editor.selectionStart;
+        refreshFind(findFrom);
+        const box = toReplace && fb.text.value ? fb.repl : fb.text;
+        box.focus(); box.select();
+    }
+    function closeFind() {
+        fb.bar.hidden = true; found = []; cur = -1; drawMarks();
+        editor.focus();
+    }
+    editor.addEventListener('scroll', syncMarks);
+    editor.addEventListener('input', () => { if (!fb.bar.hidden) refreshFind(); });
+    fb.text.addEventListener('input', () => { refreshFind(findFrom); showMatch(); });
+    [fb.case, fb.word].forEach(c => c.addEventListener('change', () => { refreshFind(cur >= 0 ? found[cur][0] : findFrom); showMatch(); }));
+    document.getElementById('find-next').addEventListener('click', () => step(1));
+    document.getElementById('find-prev').addEventListener('click', () => step(-1));
+    document.getElementById('find-replace').addEventListener('click', replaceOne);
+    document.getElementById('find-all').addEventListener('click', replaceAll);
+    document.getElementById('find-close').addEventListener('click', closeFind);
+    document.getElementById('btn-find').addEventListener('click', () => openFind(false));
+    fb.text.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
+        else if (e.key === 'Escape') closeFind();
+    });
+    fb.repl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); replaceOne(); }
+        else if (e.key === 'Escape') closeFind();
+    });
+    document.addEventListener('keydown', (e) => {
+        const inEditor = document.activeElement === editor || fb.bar.contains(document.activeElement);
+        const k = e.key.toLowerCase();
+        if (inEditor && (e.ctrlKey || e.metaKey) && !e.altKey && k === 'f') { e.preventDefault(); openFind(false); }
+        else if (inEditor && e.ctrlKey && !e.metaKey && !e.altKey && k === 'h') { e.preventDefault(); openFind(true); }
+        else if (e.key === 'F3' && !fb.bar.hidden) { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
+    });
+
     const originalLog = console.log;
     console.log = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
@@ -48,13 +197,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const originalError = console.error;
     console.error = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-        appendConsole('ERROR: ' + message + '\n');
+        appendConsole('ERROR: ' + message + '\n', 'con-error');
+        flagLines(message, 'err');
         originalError.apply(console, args);
     };
     const originalWarn = console.warn;
     console.warn = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
-        appendConsole('WARNING: ' + message + '\n');
+        appendConsole('WARNING: ' + message + '\n', 'con-warn');
+        flagLines(message, 'warn');
         originalWarn.apply(console, args);
     };
 
@@ -83,17 +234,18 @@ document.addEventListener('DOMContentLoaded', () => {
     function unitOf(name) { const m = parser.variables.get(name); return (m && UnitConv.isValid(m.unit)) ? (m.unit || '') : ''; }
     function toDisp(name, si) { return (typeof si === 'number' && Number.isFinite(si)) ? UnitConv.fromSI(si, unitOf(name)) : si; }
     function unitTag(name) { const u = unitOf(name); return u ? ` [${u}]` : ''; }
-    // Display order: order of first appearance, with the elements of each array (x[1], x[2], ..., T[1, 2]) together,
-    // at the place of the first one, and in index order (row by row for two indices)
+    // Display order: alphabetical, ignoring case and with numbers in natural order (T2 before T10), with the elements
+    // of each array (x[1], x[2], ..., T[1, 2]) together under the array's name, in index order (row by row for two indices)
     function displayOrder(names) {
-        const key = (n) => { const m = /^(.*?)\[(.+)\]$/.exec(n); return m ? { g: m[1] + '[', idx: m[2].split(',').map(Number) } : { g: n, idx: [] }; };
-        const keys = new Map(names.map(n => [n, key(n)])), first = new Map();
-        names.forEach((n, i) => { const g = keys.get(n).g; if (!first.has(g)) first.set(g, i); });
+        const key = (n) => { const m = /^(.*?)\[(.+)\]$/.exec(n); return m ? { g: m[1], idx: m[2].split(',').map(Number) } : { g: n, idx: [] }; };
+        const keys = new Map(names.map(n => [n, key(n)]));
+        const byName = (a, b) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' }) || (a < b ? -1 : a > b ? 1 : 0);
         return names.slice().sort((a, b) => {
             const ka = keys.get(a), kb = keys.get(b);
-            if (ka.g !== kb.g) return first.get(ka.g) - first.get(kb.g);
-            for (let i = 0; i < Math.max(ka.idx.length, kb.idx.length); i++) {
-                const d = (ka.idx[i] || 0) - (kb.idx[i] || 0);
+            if (ka.g !== kb.g) return byName(ka.g, kb.g);
+            if (ka.idx.length !== kb.idx.length) return ka.idx.length - kb.idx.length;   // plain x before x[1]
+            for (let i = 0; i < ka.idx.length; i++) {
+                const d = ka.idx[i] - kb.idx[i];
                 if (d) return d;
             }
             return 0;
@@ -134,11 +286,23 @@ document.addEventListener('DOMContentLoaded', () => {
         modal.style.display = 'flex';
     };
 
+    // Update guesses box: remembered in this browser
+    const updateBox = document.getElementById('update-guesses');
+    try { updateBox.checked = localStorage.getItem('ses-update-guesses') === '1'; } catch (e) { }
+    const adopt = () => { if (updateBox.checked) BoundedSolver.adoptGuesses(parser.variables); };
+    updateBox.addEventListener('change', () => {
+        try { localStorage.setItem('ses-update-guesses', updateBox.checked ? '1' : '0'); } catch (e) { }
+        const cur = currentResults();
+        if (updateBox.checked && cur) {   // ticked after a solve: take that solution now
+            parser.variables.forEach((m, n) => { if (cur.has(n)) m.value = cur.get(n); });
+            adopt(); updateVariablesUI(parser.variables);
+        }
+    });
+
     // Render Variables UI Pane
     function updateVariablesUI(variablesMap) {
         variablesContainer.innerHTML = '';
         const table = document.createElement('table');
-        table.style.width = '100%'; table.style.fontSize = '16px'; table.style.borderCollapse = 'collapse';
 
         table.innerHTML = `<thead><tr style="background:#eee; text-align:left;">
             <th style="padding:4px;">Var</th>
@@ -173,7 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.lower))}" placeholder="-inf" data-var="${name}" data-field="lower" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${meta.inferredUnit || '[-]'}" data-var="${name}" data-field="unit" style="width:100px; text-align:center;"></td>
-                <td style="padding:2px 4px; font-family:monospace; font-size:14px; font-weight:bold; color:#0056b3;">${solvedDisplay}</td>`;
+                <td class="val" style="padding:2px 4px;">${solvedDisplay}</td>`;
             tbody.appendChild(tr);
         });
         variablesContainer.appendChild(table);
@@ -343,6 +507,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             snapshotResults();
+            adopt();
             updateVariablesUI(parser.variables);
 
             // Auto-plot ODE output if present
@@ -363,8 +528,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const cell = 'padding:4px; border:1px solid #ccc; text-align:center;';
                 let html = '';
                 OdeBlocks.tables.forEach(tb => {
-                    html += `<div style="font-size:12px; margin:6px 0 2px;"><b>ode block, line ${tb.no}</b>: ${tb.rows.length} rows, ${tb.steps} internal steps</div>`;
-                    html += '<table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr style="background:#eee;">' +
+                    html += `<div style="font-size:var(--fs-small); margin:6px 0 2px;"><b>ode block, line ${tb.no}</b>: ${tb.rows.length} rows, ${tb.steps} internal steps</div>`;
+                    html += '<table style="width:100%; border-collapse:collapse; font-size:var(--fs-small);"><thead><tr style="background:#eee;">' +
                         tb.cols.map(k => `<th style="${cell}">${k}${unitTag(k)}</th>`).join('') + '</tr></thead><tbody>' +
                         tb.rows.map(r => '<tr>' + r.map((v, i) => `<td style="${cell}">${fmtNum(toDisp(tb.cols[i], v))}</td>`).join('') + '</tr>').join('') +
                         '</tbody></table>';
@@ -423,7 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log(`\n--- Running Parametric Sweep for ${pVar} ---`);
             const controller = new ParametricController(parser, BoundedSolver);
             const sUnit = unitOf(pVar);
-            const results = controller.runTable(pVar, UnitConv.toSI(pStart, sUnit), UnitConv.toSI(pEnd, sUnit), pSteps)
+            const results = controller.runTable(pVar, UnitConv.toSI(pStart, sUnit), UnitConv.toSI(pEnd, sUnit), pSteps, updateBox.checked)
                 .map(row => {   // convert every numeric column to its display unit
                     const o = {};
                     for (const k of Object.keys(row)) o[k] = (typeof row[k] === 'number') ? toDisp(k, row[k]) : row[k];
@@ -432,7 +597,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (results && results.length > 0) {
                 const keys = Object.keys(results[0]).filter(k => typeof results[0][k] === 'number');
-                let html = '<table style="width:100%; border-collapse:collapse; font-size:12px;"><thead><tr style="background:#eee;">';
+                let html = '<table style="width:100%; border-collapse:collapse; font-size:var(--fs-small);"><thead><tr style="background:#eee;">';
                 keys.forEach(k => html += `<th style="padding:4px; border:1px solid #ccc;">${k}${unitTag(k)}</th>`);
                 html += '</tr></thead><tbody>';
 
@@ -444,6 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 html += '</tbody></table>';
                 parametricContainer.innerHTML = html;
                 lastTable = { text: editor.value, tables: [{ title: `parametric table of ${pVar}`, header: keys.map(headerCell), rows: results.map(r => keys.map(k => r[k])) }] };
+                if (updateBox.checked) updateVariablesUI(parser.variables);   // the last row's values are now the guesses
 
                 // Plot independent variable vs first dependent variable
                 const yVar = keys.find(k => k !== pVar);
@@ -577,6 +743,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             optModal.style.display = 'none';
             snapshotResults();
+            adopt();
             updateVariablesUI(parser.variables);
         } catch (err) {
             console.error("Optimization Error: " + err.message);
@@ -675,12 +842,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('btn-check-units').addEventListener('click', () => {
         try {
-            console.log("\n--- Unit Check ---");
+            console.log("\n--- Check ---");
             parser.parse(editor.value);
+            const { active, dof } = activeInfo();
+            const nEq = parser.parsedASTs.length;
+            console.log(`Syntax OK: ${nEq} equation(s) and ${active.size} variable(s)` +
+                (dof === 0 ? '.' : dof > 0 ? `: ${dof} degree(s) of freedom (fine for Min/Max and Parametric Table, not for Solve).` : `: ${-dof} equation(s) too many.`));
             UnitConsistencyChecker.run(parser.parsedASTs, parser.variables);
             updateVariablesUI(parser.variables);
         } catch (err) {
-            console.error("Unit check error: " + err.message);
+            console.error("Check error: " + err.message);
         }
     });
 
@@ -801,7 +972,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function restore(session, eq) {
-            parser.variables = new Map();             // start clean: no guesses left over from the previous file
+            parser.variables = new Map(); parser.saved = new Map();   // start clean: no guesses left over from the previous file
             try { parser.parse(eq); }
             catch (e) { console.error('The equations in this file do not parse: ' + e.message); return; }
             const valid = session && session.hash === hash(norm(eq));

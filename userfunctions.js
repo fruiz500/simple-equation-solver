@@ -53,7 +53,7 @@ class UserFunctions {
                 if (/^function\b/.test(t)) throw new Error(`Line ${i + 1}: a function cannot be defined inside another one (is an 'end' missing above?).`);
                 if (/^(if|for|while)\b/.test(t)) depth++;
                 else if (/^end\s*;?$/.test(t) && --depth === 0) break;
-                if (t) body.push({ text: t.replace(/;\s*$/, '').trim(), no: i + 1 });
+                for (const p of t.split('\u0001')) if (p.trim()) body.push({ text: p.replace(/;\s*$/, '').trim(), no: i + 1 });
             }
             if (depth > 0) throw new Error(`Line ${start + 1}: this function has no matching 'end'.`);
             const def = UserFunctions.compile(head.slice(8).trim(), start + 1, body);

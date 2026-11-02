@@ -317,19 +317,31 @@ class BoundedSolver {
         // Direct AST evaluation check (handles direct assignments, arrays, and matrix operations)
         const refsTarget = (ast) => ast.filter(n => n.toString() === targetVar).length > 0;
         if (leftAST.toString() === targetVar && !refsTarget(rightAST)) {
-            try {
-                const val = rightAST.evaluate(scope);
-                if (val !== undefined) { state[targetVar] = val; return; }
-            } catch (err) { }
+            let val; try { val = rightAST.evaluate(scope); } catch (err) { }
+            if (val !== undefined) { this.noComplex(val, eqIndex, targetVar); state[targetVar] = val; return; }
         }
         if (rightAST.toString() === targetVar && !refsTarget(leftAST)) {
-            try {
-                const val = leftAST.evaluate(scope);
-                if (val !== undefined) { state[targetVar] = val; return; }
-            } catch (err) { }
+            let val; try { val = leftAST.evaluate(scope); } catch (err) { }
+            if (val !== undefined) { this.noComplex(val, eqIndex, targetVar); state[targetVar] = val; return; }
         }
 
         this.solveSimultaneousBlock([eqIndex], [targetVar], state);
+    }
+
+    // Update guesses: the values of the last solution become the guesses (numbers within the bounds only)
+    static adoptGuesses(variables) {
+        variables.forEach(m => { const v = m.value; if (typeof v === 'number' && Number.isFinite(v) && v >= m.lower && v <= m.upper) m.guess = v; });
+    }
+
+    // math.js gives complex numbers for sqrt(-1), log(-1), (-8)^(1/3) and so on. They are not supported (yet), and in
+    // these equations they nearly always mean a mistake, such as a negative value under a square root.
+    noComplex(val, eqIndex, name) {
+        const t = math.typeOf(val);
+        const list = t === 'Array' ? val : (t === 'DenseMatrix' || t === 'SparseMatrix') ? val.toArray() : null;
+        const z = t === 'Complex' ? val : list ? list.flat(Infinity).find(v => math.typeOf(v) === 'Complex') : undefined;
+        if (z === undefined) return;
+        throw new Error(`${this.eqLabel(eqIndex).replace(/^l/, 'L')}: ${t === 'Complex' ? name + ' comes out as' : 'an element of ' + name + ' is'} the complex number ${math.format(z, { precision: 6 })}, ` +
+            `for example from the square root or logarithm of a negative number. Complex numbers are not supported.`);
     }
 
     // Sets a variable in an equation scope, including its slot in the array that x[k] expressions read
@@ -513,7 +525,8 @@ class ParametricController {
         this.solverClass = solverClass;
     }
 
-    runTable(paramVar, startVal, endVal, steps) {
+    // update: each row starts from the solution of the row before (the Update guesses box)
+    runTable(paramVar, startVal, endVal, steps, update = false) {
         const results = [];
         const stepSize = (endVal - startVal) / (steps - 1);
 
@@ -530,6 +543,7 @@ class ParametricController {
 
             const solver = new this.solverClass(this.parser.parsedASTs, this.parser.variables, this.parser.odeCalls);
             const solution = solver.solve();
+            if (update) BoundedSolver.adoptGuesses(this.parser.variables);
             results.push({ [paramVar]: val, ...solution });
         }
         return results;

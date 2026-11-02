@@ -26,6 +26,32 @@ class UserUnits {
             UnitConv.cache.clear();
         }
     }
+    // 1 [$] = 0.88 [euro]: defines the name on the left from a unit already known (declared or math.js's own).
+    // Each name and definition gets its own math.js unit, so a changed factor never redefines one in use.
+    static derived = new Set();    // math.js names of the defined units (they add no dimension)
+    static define(name, factor, unit, where) {
+        if (!UserUnits.NAME.test(name)) throw new Error(`${where}: '${name}' cannot be a unit name (use letters, digits, _ and $ € £ ¥, starting with a letter or a currency sign)`);
+        if (!UserUnits.active.has(name)) {
+            let known = true;
+            try { math.unit(1, name); } catch (e) { known = false; }
+            if (known) throw new Error(`${where}: '${name}' is already a unit and cannot be redefined`);
+        }
+        let c;
+        try { c = UnitConv.coef(unit); } catch (e) { throw new Error(`${where}: unit '${unit}' on the right is not known (declare new names first, e.g.  units euro)`); }
+        if (c.a !== 0) throw new Error(`${where}: define units from ones without an offset (K, not degC or degF)`);
+        if (!(Number.isFinite(factor) && factor > 0)) throw new Error(`${where}: the conversion factor must be a positive number`);
+        const t = UserUnits.translate(unit);
+        if (t.split(/[\s*\/^()]+/).includes(UserUnits.active.get(name))) throw new Error(`${where}: '${name}' cannot be defined from itself`);
+        const key = `${name}=${+factor.toPrecision(15)} ${t}`;
+        if (!UserUnits.internal.has(key)) {
+            const id = 'UsrDef' + UserUnits.derived.size;
+            math.createUnit(id, `${+factor.toPrecision(15)} ${t}`);
+            UserUnits.internal.set(key, id);
+            UserUnits.derived.add(id);
+        }
+        UserUnits.active.set(name, UserUnits.internal.get(key));
+        UnitConv.cache.clear();
+    }
     // The unit string with declared names replaced by their math.js names (unchanged when none is used)
     static translate(u) {
         if (!UserUnits.active.size) return u;
@@ -33,7 +59,7 @@ class UserUnits {
     }
     // Declared name of a dimension index beyond math.js's own (for messages and inferred units)
     static nameOfDim(i) {
-        for (const [n, id] of UserUnits.internal) if (math.unit(1, id).units[0].unit.base.dimensions[i] === 1) return n;
+        for (const [n, id] of UserUnits.internal) if (!UserUnits.derived.has(id) && math.unit(1, id).units[0].unit.base.dimensions[i] === 1) return n;
         return '?';
     }
 }

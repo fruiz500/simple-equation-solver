@@ -12,13 +12,13 @@ class EESParser {
         this.parsedASTs = [];
         this.variables = new Map();
         this.odeCalls = [];
+        this.saved = new Map();   // name -> guess, bounds and unit of the last parse that succeeded, kept through parse errors
     }
 
     parse(text) {
         this.rawEquations = [];
         this.parsedASTs = [];
         this.odeCalls = [];
-        this.previousVariables = this.variables;
         this.variables = new Map();
 
         // Comments are blanked but keep their line breaks, so messages can give line numbers
@@ -26,6 +26,7 @@ class EESParser {
         if (cleanText.includes('/*')) throw new Error("A '/*' comment is never closed with '*/'.");
         const srcLines = cleanText.split('\n');
         EESParser.joinContinuations(srcLines);                  // a line with an open ( or [ continues on the next lines
+        EESParser.splitSemicolons(srcLines);                    // a = 1; b = 2  on one line: two equations, same line number
         EESParser.declareUnits(srcLines);                       // units $, euro, person: new unit names
         this.constants = EESParser.constantsOf(srcLines);       // name = number lines, for duplicate ranges and indices
         EESParser.expandDuplicates(srcLines, this.constants);   // writes out the duplicate ... end blocks
@@ -33,14 +34,15 @@ class EESParser {
         const userFuncs = UserFunctions.extract(srcLines);      // lifts out the function ... end blocks
         // String variables:  fluid$ = 'R134a'  (substituted as text wherever fluid$ appears)
         const strVars = {};
-        cleanText = srcLines.map(l => {
-            const m = l.trim().match(/^([A-Za-z_]\w*)\$\s*=\s*(['"])([^'"]*)\2$/);
-            if (m) { strVars[m[1]] = m[3]; return ''; }
-            return l;
-        }).join('\n');
+        cleanText = srcLines.map(l => l.split('\u0001').filter(p => {
+            const m = p.trim().match(/^([A-Za-z_]\w*)\$\s*=\s*(['"])([^'"]*)\2$/);
+            if (m) { strVars[m[1]] = m[3]; return false; }
+            return true;
+        }).join('\u0001')).join('\n');
         UserFunctions.activate(userFuncs, strVars);
         OdeBlocks.activate(odeBlocks, strVars, (node) => this.flatIndex(node));
         cleanText = cleanText.replace(/([A-Za-z_]\w*)\$/g, (all, name) => {
+            if (!(name in strVars) && UserUnits.active.has(all)) return all;   // a unit such as k$
             if (!(name in strVars)) throw new Error(`String variable '${name}$' is not defined. Define it first, e.g. ${name}$ = 'water'`);
             return "'" + strVars[name] + "'";
         });
@@ -73,6 +75,7 @@ class EESParser {
             if (eqAt.length === 0) throw new Error(`Line ${lineNo}: missing '=' sign in '${line}'.`);
             if (eqAt.length > 1) throw new Error(`Line ${lineNo}: more than one '=' in '${line}' (write comparisons as ==, <=, >=, !=).`);
             const parts = [line.slice(0, eqAt[0]), line.slice(eqAt[0] + 1)];
+            if (!parts[0].trim() || !parts[1].trim()) throw new Error(`Line ${lineNo}: nothing on the ${parts[0].trim() ? 'right' : 'left'} of '=' in '${line}'.`);
 
             try {
                 const leftAST = this.flatIndex(UserFunctions.lowerIf(math.parse(parts[0].trim())));
@@ -117,6 +120,7 @@ class EESParser {
             }
         }
         OdeBlocks.active.forEach(blk => this.addOdeBlock(blk));
+        this.saved = new Map(this.variables);   // parsed: the store holds just these variables (a failed parse leaves it whole)
         return { equationsCount: this.rawEquations.length, variables: Array.from(this.variables.keys()) };
     }
 
@@ -169,23 +173,55 @@ class EESParser {
         }
     }
 
+    // Semicolons outside brackets and quotes separate equations written on one line. The pieces stay in that line's
+    // slot, separated by \u0001, so messages keep the source line number. A trailing ; is allowed (Matlab style).
+    // Lines that open or close a block (function, ode, duplicate, if, for, while, else, end) are left as they are.
+    static splitSemicolons(lines) {
+        const block = /^(function|ode|duplicate|if|elseif|else|for|while|end)\b/;
+        lines.forEach((l, i) => {
+            if (!l.includes(';') || block.test(l.trim())) return;
+            const out = [];
+            let d = 0, q = null, cur = '';
+            for (let k = 0; k < l.length; k++) {
+                const c = l[k];
+                if (q) { if (c === q) q = null; }
+                else if (c === '"' || (c === "'" && !/[A-Za-z0-9_\])]/.test(l[k - 1] || ''))) q = c;   // ' after a name is a transpose
+                else if (c === '(' || c === '[') d++;
+                else if (c === ')' || c === ']') d--;
+                if (c === ';' && d === 0 && !q) { out.push(cur); cur = ''; } else cur += c;
+            }
+            out.push(cur);
+            const pieces = out.filter(p => p.trim());
+            const late = pieces.slice(1).find(p => block.test(p.trim()));
+            if (late) throw new Error(`Line ${i + 1}: '${late.trim().split(/\s/)[0]}' must start its own line, not follow a semicolon.`);
+            lines[i] = pieces.join('\u0001');
+        });
+    }
+
     // Lines  units $, euro, person  declare new unit names (see UserUnits in units.js); the lines are then left empty
+    // and lines  1 [$] = 0.88 [euro]  define a unit from a known one (the name on the left is new; any factors)
     static declareUnits(lines) {
+        const num = '([-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?)';
+        const DEF = new RegExp(`^\\s*${num}\\s*\\[\\s*([^\\]\\s]+)\\s*\\]\\s*=\\s*${num}\\s*\\[([^\\]]+)\\]\\s*$`);
         UserUnits.reset();
         lines.forEach((l, i) => {
-            const m = l.match(/^\s*units\s+([^=]*)$/);
-            if (!m) return;
-            const names = m[1].split(/[\s,]+/).filter(Boolean);
-            if (!names.length) throw new Error(`Line ${i + 1}: list the new units after 'units', e.g.  units $, euro`);
-            UserUnits.declare(names, `Line ${i + 1}`);
-            lines[i] = '';
+            lines[i] = l.split('\u0001').filter(p => {
+                const d = p.match(DEF);
+                if (d) { UserUnits.define(d[2], +d[3] / +d[1], d[4].trim(), `Line ${i + 1}`); return false; }
+                const m = p.match(/^\s*units\s+([^=]*)$/);
+                if (!m) return true;
+                const names = m[1].split(/[\s,]+/).filter(Boolean);
+                if (!names.length) throw new Error(`Line ${i + 1}: list the new units after 'units', e.g.  units $, euro`);
+                UserUnits.declare(names, `Line ${i + 1}`);
+                return false;
+            }).join('\u0001');
         });
     }
 
     static constantsOf(lines) {
         const C = {}, cand = [];
         let skip = 0, depth = 0;                                  // inside a block: skip its lines
-        lines.forEach((raw) => {
+        lines.flatMap(l => l.split('\u0001')).forEach((raw) => {
             const t = raw.trim();
             if (skip) {
                 if (/^(if|for|while|duplicate)\b/.test(t)) depth++;
@@ -395,14 +431,16 @@ class EESParser {
 
     registerVariable(name) {
         if (!this.variables.has(name)) {
-            const old = this.previousVariables && this.previousVariables.get(name);
-            this.variables.set(name, {
+            const old = this.saved.get(name);
+            const meta = {
                 guess: old ? old.guess : 1.0,
                 lower: old ? old.lower : -Infinity,
                 upper: old ? old.upper : Infinity,
                 value: null,
                 unit: old ? old.unit : ''
-            });
+            };
+            this.variables.set(name, meta);
+            this.saved.set(name, meta);   // the pane edits this object, so the store follows the edits
         }
     }
 }

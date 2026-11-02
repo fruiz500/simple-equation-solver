@@ -30,7 +30,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 
 **Units**
 - Unit tags such as `[kPa]`, `[W/(m^2 K)]` and `[degC]` on values and results. Calculations are done in SI and results are shown in the unit you choose.
-- **Check Units** checks the dimensional consistency of every equation and infers units for untagged variables.
+- **Check** checks the dimensional consistency of every equation and infers units for untagged variables.
 - New units can be declared, for example `units $, euro`.
 
 **Properties**
@@ -43,7 +43,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - These are named after the correlation, so the choice is visible in the equations: `nu_gnielinski(Re, Pr)`, `nu_churchillchu_plate(Ra, Pr)`, `f_colebrook(Re, eps_D)` (the Moody chart), `cd_sphere(Re)`, `q_rohsenow(...)`, `h_cond_tube(...)`, and so on.
 - They cover forced convection (internal flow, flat plates, cylinders, spheres, tube banks), free convection (plates, cylinders, spheres, channels, enclosures, concentric cylinders and spheres), boiling (nucleate, critical and minimum heat flux, film boiling, flow boiling) and condensation (film on plates, tubes and spheres, in tubes, dropwise).
 - Fins (efficiencies of the Table 3.5 shapes, including the Bessel-function ones, and the heat rate and temperature of uniform fins), transient conduction (the exact series for plane walls, cylinders and spheres, with computed eigenvalues, the semi-infinite solid, the heat rates of Table 5.2, and multidimensional product solutions), conduction shape factors (Table 4.1) and radiation (the blackbody functions and the view factors of Tables 13.1 and 13.2). Bessel functions and erfc are available directly.
-- Convection correlations take dimensionless arguments; the boiling and condensation ones take SI quantities, and Check Units checks each argument. A value outside the published range of a correlation is still computed, with a warning.
+- Convection correlations take dimensionless arguments; the boiling and condensation ones take SI quantities, and Check checks each argument. A value outside the published range of a correlation is still computed, with a warning.
 
 - **Heat exchangers:** the ε–NTU relations of every standard flow arrangement, as lines to paste into the equations (they solve forward and backward), and `eps_regenerator`, a periodic-flow model of rotary and fixed-bed regenerators that solves together with properties evaluated at the unknown outlet temperatures.
 
@@ -78,7 +78,7 @@ You can also serve the folder with GitHub Pages or any static web server. Nothin
 | `solver.js` | Block decomposition, Newton solver, optimizers, interpolation |
 | `ode.js` | ODE blocks and integrators |
 | `userfunctions.js` | User-defined functions |
-| `units.js` | Unit conversion and Check Units |
+| `units.js` | Unit conversion and Check |
 | `thermo.js` | CoolProp interface and NASA ideal-gas data |
 | `solids.js` | Solid property tables |
 | `correlations.js` | Heat transfer and friction correlations |
