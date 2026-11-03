@@ -799,6 +799,57 @@ class NH3H2O {
     }
 }
 
+// U.S. Standard Atmosphere, 1976 (NOAA, NASA, USAF), from -5 to 86 km geometric altitude: the seven layers of linear
+// molecular-scale temperature in geopotential altitude (Table 4), the hydrostatic equation for P (Eqs. 33a, 33b), and above
+// 80 km the ratio M/M0 of Table 8 for the kinetic temperature (Eq. 22). Viscosity (Eq. 51), thermal conductivity (Eq. 53),
+// speed of sound (Eq. 50), gravity (Eq. 17), with the constants of the standard (R* = 8.31432 J/(mol K), M0 = 28.9644 g/mol).
+class StdAtmosphere {
+    static G0 = 9.80665; static RS = 8.31432; static M0 = 0.0289644; static R0 = 6356766; static GAMMA = 1.4;
+    static HB = [0, 11000, 20000, 32000, 47000, 51000, 71000, 84852];
+    static LB = [-0.0065, 0, 0.001, 0.0028, 0, -0.0028, -0.002];
+    static MZ = [1, 0.999996, 0.999989, 0.999971, 0.999941, 0.999909, 0.999870, 0.999829, 0.999786, 0.999741, 0.999694, 0.999641, 0.999579];   // 80 to 86 km by 0.5 km
+    static base = (() => {   // T_M and P at the layer bases
+        const A = StdAtmosphere, T = [288.15], P = [101325], k = A.G0 * A.M0 / A.RS;
+        for (let i = 0; i < 7; i++) {
+            const dH = A.HB[i + 1] - A.HB[i], L = A.LB[i];
+            T.push(T[i] + L * dH);
+            P.push(L === 0 ? P[i] * Math.exp(-k * dH / T[i]) : P[i] * Math.pow(T[i] / T[i + 1], k / L));
+        }
+        return { T, P };
+    })();
+    static OUT = { t: 1, p: 1, rho: 1, c: 1, mu: 1, k: 1, nu: 1, g: 1, h: 1 };
+    static state(z) {
+        const A = StdAtmosphere;
+        if (!(z >= -5000 - 1e-9 && z <= 86000 + 1e-9)) throw new Error(`atmosphere(): z = ${z} m is outside the standard atmosphere, -5000 to 86000 m (geometric altitude)`);
+        const H = A.R0 * z / (A.R0 + z), k = A.G0 * A.M0 / A.RS;
+        let i = 0; while (i < 6 && H >= A.HB[i + 1]) i++;
+        const Tb = A.base.T[i], Pb = A.base.P[i], L = A.LB[i], dH = H - A.HB[i], TM = Tb + L * dH;
+        const P = L === 0 ? Pb * Math.exp(-k * dH / Tb) : Pb * Math.pow(Tb / TM, k / L);
+        let ratio = 1;
+        if (z > 80000) { const x = (z - 80000) / 500, j = Math.min(Math.floor(x), 11); ratio = A.MZ[j] + (x - j) * (A.MZ[j + 1] - A.MZ[j]); }
+        const T = TM * ratio, rho = P * A.M0 / (A.RS * TM), mu = 1.458e-6 * T ** 1.5 / (T + 110.4);
+        return { t: T, p: P, rho, c: Math.sqrt(A.GAMMA * A.RS * TM / A.M0), mu, k: 2.64638e-3 * T ** 1.5 / (T + 245.4 * 10 ** (-12 / T)), nu: mu / rho,
+            g: A.G0 * (A.R0 / (A.R0 + z)) ** 2, h: H };
+    }
+    static evaluate(name, a) {
+        const A = StdAtmosphere, key = (s) => String(s).trim().toLowerCase();
+        const list = "'T', 'P', 'rho', 'c', 'mu', 'k', 'nu', 'g', 'H'";
+        if (name === 'atmosphere') {
+            if (a.length !== 2) throw new Error("atmosphere(): use atmosphere('output', z), z the geometric altitude in m");
+            const o = key(a[0]); if (!(o in A.OUT)) throw new Error(`atmosphere(): '${a[0]}' should be one of ${list}`);
+            return A.state(ThermoEngine.num(a[1], 'atmosphere() altitude'))[o];
+        }
+        if (a.length !== 2) throw new Error("atmosphere_altitude(): use atmosphere_altitude('P', value) or atmosphere_altitude('rho', value)");
+        const o = key(a[0]), v = ThermoEngine.num(a[1], 'atmosphere_altitude() value');
+        if (o !== 'p' && o !== 'rho') throw new Error(`atmosphere_altitude(): the altitude can be found from 'P' or 'rho' (they fall steadily with altitude), not from '${a[0]}'`);
+        const f = (z) => A.state(z)[o], lo0 = f(86000), hi0 = f(-5000);
+        if (!(v >= lo0 && v <= hi0)) throw new Error(`atmosphere_altitude(): ${o === 'p' ? 'P' : 'rho'} = ${v} is outside the standard atmosphere, ${+lo0.toPrecision(5)} to ${+hi0.toPrecision(5)} ${o === 'p' ? 'Pa' : 'kg/m^3'}`);
+        let lo = -5000, hi = 86000;
+        for (let it = 0; it < 200 && hi - lo > 1e-9; it++) { const m = (lo + hi) / 2; if (f(m) > v) lo = m; else hi = m; }
+        return (lo + hi) / 2;
+    }
+}
+
 // ==========================================
 // 2. THERMODYNAMIC PROPERTY ENGINE (COOLPROP)
 // ==========================================
@@ -880,6 +931,9 @@ class ThermoEngine {
         libr_density: { key: '', unit: 'kg/m^3', kind: 'libr', argUnits: ['K', ''], desc: 'Density of a LiBr-H2O solution: libr_density(T, x)' },
         // --- ammonia-water mixtures (provisional: see the NH3H2O class) ---
         nh3h2o: { key: '', unit: '', kind: 'nh3', desc: "Ammonia-water mixture (provisional model): nh3h2o('output', 'key1', v1, 'key2', v2, 'key3', v3); keys T, P, x (NH3 mass fraction), q, h; outputs T, P, x, h, s, u, v, q, xl, yv" },
+        // --- U.S. Standard Atmosphere 1976, -5 to 86 km ---
+        atmosphere: { key: '', unit: '', kind: 'atm', desc: "U.S. Standard Atmosphere 1976 at geometric altitude z in m (-5 to 86 km): atmosphere('output', z); outputs T, P, rho, c, mu, k, nu, g, H (geopotential altitude)" },
+        atmosphere_altitude: { key: '', unit: 'm', kind: 'atm', desc: "Geometric altitude of the standard atmosphere where the pressure or the density has a value: atmosphere_altitude('P', P) or ('rho', rho)" },
         // --- general access to everything else CoolProp offers ---
         props: { key: '', unit: '', kind: 'props', desc: "props('output', fluid, 'key1', v1, 'key2', v2): any CoolProp output parameter" },
         props1: { key: '', unit: '', kind: 'props1', desc: "props1('output', fluid): any CoolProp fluid constant" },
@@ -939,6 +993,7 @@ class ThermoEngine {
         if (spec.kind === 'ig' || spec.kind === 'igmix') return IdealGas.evaluate(name, a);
         if (spec.kind === 'libr') return LiBrH2O.evaluate(name, a);
         if (spec.kind === 'nh3') return NH3H2O.evaluate(a);
+        if (spec.kind === 'atm') return StdAtmosphere.evaluate(name, a);
         if (spec.kind === 'exergy') {   // physical exergy relative to the same fluid at T0, P0, through the property functions above
             if (a.length !== 5 && a.length !== 7) throw new Error(`${name}(): use ${name}(fluid, T, P, T0, P0) or ${name}(fluid, 'key1', v1, 'key2', v2, T0, P0)`);
             const T0 = ThermoEngine.num(a[a.length - 2], `${name}() T0`), P0 = ThermoEngine.num(a[a.length - 1], `${name}() P0`);
