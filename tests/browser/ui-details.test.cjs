@@ -59,6 +59,15 @@ const { open } = require('../lib/browser.cjs');
   ok('integral() in an equation: 1000 ln 2 = 693.1472', /\n  ds = 693\.1472\n/.test(c), c);
   await app.clear(); await pg.fill('#console-input', 'integral(x^2, x, 0, 3)'); await pg.press('#console-input', 'Enter'); await pg.waitForTimeout(150);
   ok('and on the console line: 9', /^> integral\(x\^2, x, 0, 3\)\n  9\n$/.test(await app.con()), await app.con());
+  // Formatted view: equations as MathML, back to the editor with the text unchanged
+  const fsrc = 'h_2 = h_1 - eta*(h_1 - h_2s) [kJ/kg]\nm_dot = rho*V*A/2 // comment\nfunction f = g(x)\n  f = x\nend';
+  await pg.fill('#editor', fsrc); await pg.click('#btn-format');
+  const fv = await pg.evaluate(() => ({ maths: document.querySelectorAll('#formatted-body math').length, texts: document.querySelectorAll('#formatted-body .fe-text').length,
+    editorHidden: document.getElementById('editor-box').hidden, label: document.getElementById('btn-format').textContent, body: document.getElementById('formatted-body').textContent }));
+  ok('Formatted: 2 equations as MathML, 3 block lines as text, comment left out, editor hidden', fv.maths === 2 && fv.texts === 3 && fv.editorHidden && fv.label === 'Text' && !/comment/.test(fv.body), fv);
+  ok('each equation carries its LaTeX for copying', (await pg.$$eval('#formatted-body .fe-eq', es => es.map(e => e.dataset.tex)))[0] === '{h}_{2} = {h}_{1} - \\eta \\cdot \\left({h}_{1} - {h}_{\\mathrm{2s}}\\right)\\quad \\left[\\mathrm{kJ/kg}\\right]', await pg.$$eval('#formatted-body .fe-eq', es => es.map(e => e.dataset.tex)));
+  await pg.click('#btn-format');
+  ok('Text: back to the editor, text unchanged', !(await pg.$eval('#editor-box', e => e.hidden)) && (await pg.$eval('#formatted', e => e.hidden)) && (await pg.inputValue('#editor')) === fsrc);
   ok('no uncaught page errors', app.pageErrors.length === 0, app.pageErrors);
   await app.b.close();
   console.log(`${pass} passed, ${fail} failed`); process.exitCode = fail ? 1 : 0;
