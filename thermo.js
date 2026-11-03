@@ -415,9 +415,11 @@ const IceIh = (() => {
     const M = 0.018015268;
     const props = (T, p) => {
         const G = gibbs(T, p), v = G.gp, cp = -T * G.gTT, alpha = G.gTp / G.gp, kT = -G.gpp / G.gp, k = 612 / T;
-        return { T, P: p, Q: -1, G: G.g, S: -G.gT, H: G.g - T * G.gT, U: G.g - T * G.gT - p * G.gp, Helmholtzmass: G.g - p * G.gp, D: 1 / v, V_SPEC: v,
+        return {
+            T, P: p, Q: -1, G: G.g, S: -G.gT, H: G.g - T * G.gT, U: G.g - T * G.gT - p * G.gp, Helmholtzmass: G.g - p * G.gp, D: 1 / v, V_SPEC: v,
             Cpmass: cp, Cvmass: cp - T * v * alpha * alpha / kT, isobaric_expansion_coefficient: alpha, isothermal_compressibility: kT, L: k, ALPHA: k * G.gp / cp, Phase: 9,
-            Hmolar: (G.g - T * G.gT) * M, Smolar: -G.gT * M, Umolar: (G.g - T * G.gT - p * G.gp) * M, Gmolar: G.g * M, Cpmolar: cp * M, Cvmolar: (cp - T * v * alpha * alpha / kT) * M, Dmolar: 1 / (v * M) };
+            Hmolar: (G.g - T * G.gT) * M, Smolar: -G.gT * M, Umolar: (G.g - T * G.gT - p * G.gp) * M, Gmolar: G.g * M, Cpmolar: cp * M, Cvmolar: (cp - T * v * alpha * alpha / kT) * M, Dmolar: 1 / (v * M)
+        };
     };
     // Sublimation and melting (ice Ih) pressures, R14-08(2011), and their inverses
     const psub = (T) => { const th = T / Tt; return pt * Math.exp((-0.212144006e2 * th ** 0.333333333e-2 + 0.273203819e2 * th ** 1.20666667 - 0.61059813e1 * th ** 1.70333333) / th); };
@@ -485,9 +487,11 @@ const WaterBelowTriple = {
     },
     outKey(o) {   // CoolProp output names accepted by props() for ice, to the keys used here
         const l = o.toLowerCase();
-        const m = { h: 'H', hmass: 'H', s: 'S', smass: 'S', u: 'U', umass: 'U', g: 'G', gmass: 'G', d: 'D', dmass: 'D', t: 'T', p: 'P', q: 'Q', c: 'Cpmass', cpmass: 'Cpmass', o: 'Cvmass', cvmass: 'Cvmass',
+        const m = {
+            h: 'H', hmass: 'H', s: 'S', smass: 'S', u: 'U', umass: 'U', g: 'G', gmass: 'G', d: 'D', dmass: 'D', t: 'T', p: 'P', q: 'Q', c: 'Cpmass', cpmass: 'Cpmass', o: 'Cvmass', cvmass: 'Cvmass',
             l: 'L', conductivity: 'L', helmholtzmass: 'Helmholtzmass', hmolar: 'Hmolar', smolar: 'Smolar', umolar: 'Umolar', gmolar: 'Gmolar', cpmolar: 'Cpmolar', cvmolar: 'Cvmolar', dmolar: 'Dmolar',
-            isobaric_expansion_coefficient: 'isobaric_expansion_coefficient', isothermal_compressibility: 'isothermal_compressibility', phase: 'Phase' };
+            isobaric_expansion_coefficient: 'isobaric_expansion_coefficient', isothermal_compressibility: 'isothermal_compressibility', phase: 'Phase'
+        };
         return m[l] || o;
     },
     // Sublimation equilibrium: Q = 0 ice, Q = 1 vapor, in between a mixture (extensive properties only)
@@ -544,23 +548,31 @@ class LiBrH2O {
     static Tc = 647.096; static T0 = 221;                            // K
     static hc = 37548.5; static sc = 79.3933; static cpt = 76.0226;  // J/mol, J/(mol K), J/(mol K)
     static rhoc = 17873;                                             // mol/m^3
-    static P = { a: [-2.41303e2, 1.91750e7, -1.75521e8, 3.25432e7, 3.92571e2, -2.12626e3, 1.85127e8, 1.91216e3],
-        m: [3, 4, 4, 8, 1, 1, 4, 6], n: [0, 5, 6, 3, 0, 2, 6, 0], t: [0, 0, 0, 0, 1, 1, 1, 1] };
+    static P = {
+        a: [-2.41303e2, 1.91750e7, -1.75521e8, 3.25432e7, 3.92571e2, -2.12626e3, 1.85127e8, 1.91216e3],
+        m: [3, 4, 4, 8, 1, 1, 4, 6], n: [0, 5, 6, 3, 0, 2, 6, 0], t: [0, 0, 0, 0, 1, 1, 1, 1]
+    };
     static RHO = { a: [1.746, 4.709], m: [1, 1], t: [0, 6] };
-    static CPT = { a: [-14.2094, 40.4943, 111.135, 229.980, 1345.26, -0.0141010, 0.0124977, -0.000683209],
-        m: [2, 3, 3, 3, 3, 2, 1, 1], n: [0, 0, 1, 2, 3, 0, 3, 2], t: [0, 0, 0, 0, 0, 2, 3, 4] };
-    static H = { a: [2.27431, -7.99511, 385.239, -16394, -422.562, 0.113314, -8.33474, -17383.3, 6.49763, 3245.52, -13464.3,
-        39932.2, -258877, -0.00193046, 2.80616, -40.4479, 145.342, -2.74873, -449.743, -12.1794, -0.00583739, 0.233910,
-        0.341888, 8.85259, -17.8731, 0.0735179, -0.000179430, 0.00184261, -0.00624282, 0.00684765],
+    static CPT = {
+        a: [-14.2094, 40.4943, 111.135, 229.980, 1345.26, -0.0141010, 0.0124977, -0.000683209],
+        m: [2, 3, 3, 3, 3, 2, 1, 1], n: [0, 0, 1, 2, 3, 0, 3, 2], t: [0, 0, 0, 0, 0, 2, 3, 4]
+    };
+    static H = {
+        a: [2.27431, -7.99511, 385.239, -16394, -422.562, 0.113314, -8.33474, -17383.3, 6.49763, 3245.52, -13464.3,
+            39932.2, -258877, -0.00193046, 2.80616, -40.4479, 145.342, -2.74873, -449.743, -12.1794, -0.00583739, 0.233910,
+            0.341888, 8.85259, -17.8731, 0.0735179, -0.000179430, 0.00184261, -0.00624282, 0.00684765],
         m: [1, 1, 2, 3, 6, 1, 3, 5, 4, 5, 5, 6, 6, 1, 2, 2, 2, 5, 6, 7, 1, 1, 2, 2, 2, 3, 1, 1, 1, 1],
         n: [0, 1, 6, 6, 2, 0, 0, 4, 0, 4, 5, 5, 6, 0, 3, 5, 7, 0, 3, 1, 0, 4, 2, 6, 7, 0, 0, 1, 2, 3],
-        t: [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5] };
-    static S = { a: [1.53091, -4.52564, 698.302, -21666.4, -1475.33, 0.0847012, -6.59523, -29533.1, 0.00956314, -0.188679,
-        9.31752, 5.78104, 13893.1, -17176.2, 415.108, -55564.7, -0.00423409, 30.5242, -1.67620, 14.8283, 0.00303055,
-        -0.0401810, 0.149252, 2.59240, -0.177421, -0.0000699650, 0.000605007, -0.00165228, 0.00122966],
+        t: [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5]
+    };
+    static S = {
+        a: [1.53091, -4.52564, 698.302, -21666.4, -1475.33, 0.0847012, -6.59523, -29533.1, 0.00956314, -0.188679,
+            9.31752, 5.78104, 13893.1, -17176.2, 415.108, -55564.7, -0.00423409, 30.5242, -1.67620, 14.8283, 0.00303055,
+            -0.0401810, 0.149252, 2.59240, -0.177421, -0.0000699650, 0.000605007, -0.00165228, 0.00122966],
         m: [1, 1, 2, 3, 6, 1, 3, 5, 1, 2, 2, 4, 5, 5, 6, 6, 1, 3, 5, 7, 1, 1, 1, 2, 3, 1, 1, 1, 1],
         n: [0, 1, 6, 6, 2, 0, 0, 4, 0, 0, 4, 0, 4, 5, 2, 5, 0, 4, 0, 1, 0, 2, 4, 7, 1, 0, 1, 2, 3],
-        t: [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 5, 5] };
+        t: [0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 5, 5]
+    };
     static TMIN = 273.16; static TMAX = 500; static WMAX = 0.75;
     static check(name, T, w) {
         if (!(T >= LiBrH2O.TMIN && T <= LiBrH2O.TMAX)) throw new Error(`${name}(): T = ${T} K is outside 273.16 to 500 K, the range of the formulation`);
@@ -632,14 +644,19 @@ class NH3H2O {
     static R = 8.314; static TB = 100; static PB = 10;                    // kJ/(kmol K), K, bar
     static MA = 17.03026; static MW = 18.0153;                            // kg/kmol
     static C = {
-        a: { A: [3.971423e-2, -1.790557e-5, -1.308905e-2, 3.752836e-3], B: [1.634519e1, -6.508119, 1.448937],
-             C: [-1.049377e-2, -8.288224, -6.647257e2, -3.045352e3], D: [3.673647, 9.989629e-2, 3.617622e-2],
-             hl: 4.878573, hg: 26.468873, sl: 1.644773, sg: 8.339026, T0: 3.2252, P0: 2.0 },
-        w: { A: [2.748796e-2, -1.016665e-5, -4.452025e-3, 8.389246e-4], B: [1.214557e1, -1.898065, 2.911966e-1],
-             C: [2.136131e-2, -3.169291e1, -4.634611e4, 0], D: [4.019170, -5.175550e-2, 1.951939e-2],
-             hl: 21.821141, hg: 60.965058, sl: 5.733498, sg: 13.453430, T0: 5.0705, P0: 3.0 } };
+        a: {
+            A: [3.971423e-2, -1.790557e-5, -1.308905e-2, 3.752836e-3], B: [1.634519e1, -6.508119, 1.448937],
+            C: [-1.049377e-2, -8.288224, -6.647257e2, -3.045352e3], D: [3.673647, 9.989629e-2, 3.617622e-2],
+            hl: 4.878573, hg: 26.468873, sl: 1.644773, sg: 8.339026, T0: 3.2252, P0: 2.0
+        },
+        w: {
+            A: [2.748796e-2, -1.016665e-5, -4.452025e-3, 8.389246e-4], B: [1.214557e1, -1.898065, 2.911966e-1],
+            C: [2.136131e-2, -3.169291e1, -4.634611e4, 0], D: [4.019170, -5.175550e-2, 1.951939e-2],
+            hl: 21.821141, hg: 60.965058, sl: 5.733498, sg: 13.453430, T0: 5.0705, P0: 3.0
+        }
+    };
     static E = [-41.733398, 0.02414, 6.702285, -0.011475, 63.608967, -62.490768, 1.761064, 0.008626, 0.387983, -0.004772,
-        -4.648107, 0.836376, -3.553627, 0.000904, 24.361723, -20.736547];
+    -4.648107, 0.836376, -3.553627, 0.000904, 24.361723, -20.736547];
     static GL(c, Tr, Pr) {   // reduced Gibbs energy of a pure liquid
         const { A, B, T0, P0 } = c;
         return c.hl - Tr * c.sl + B[0] * (Tr - T0) + B[1] / 2 * (Tr ** 2 - T0 ** 2) + B[2] / 3 * (Tr ** 3 - T0 ** 3)
@@ -782,6 +799,57 @@ class NH3H2O {
     }
 }
 
+// U.S. Standard Atmosphere, 1976 (NOAA, NASA, USAF), from -5 to 86 km geometric altitude: the seven layers of linear
+// molecular-scale temperature in geopotential altitude (Table 4), the hydrostatic equation for P (Eqs. 33a, 33b), and above
+// 80 km the ratio M/M0 of Table 8 for the kinetic temperature (Eq. 22). Viscosity (Eq. 51), thermal conductivity (Eq. 53),
+// speed of sound (Eq. 50), gravity (Eq. 17), with the constants of the standard (R* = 8.31432 J/(mol K), M0 = 28.9644 g/mol).
+class StdAtmosphere {
+    static G0 = 9.80665; static RS = 8.31432; static M0 = 0.0289644; static R0 = 6356766; static GAMMA = 1.4;
+    static HB = [0, 11000, 20000, 32000, 47000, 51000, 71000, 84852];
+    static LB = [-0.0065, 0, 0.001, 0.0028, 0, -0.0028, -0.002];
+    static MZ = [1, 0.999996, 0.999989, 0.999971, 0.999941, 0.999909, 0.999870, 0.999829, 0.999786, 0.999741, 0.999694, 0.999641, 0.999579];   // 80 to 86 km by 0.5 km
+    static base = (() => {   // T_M and P at the layer bases
+        const A = StdAtmosphere, T = [288.15], P = [101325], k = A.G0 * A.M0 / A.RS;
+        for (let i = 0; i < 7; i++) {
+            const dH = A.HB[i + 1] - A.HB[i], L = A.LB[i];
+            T.push(T[i] + L * dH);
+            P.push(L === 0 ? P[i] * Math.exp(-k * dH / T[i]) : P[i] * Math.pow(T[i] / T[i + 1], k / L));
+        }
+        return { T, P };
+    })();
+    static OUT = { t: 1, p: 1, rho: 1, c: 1, mu: 1, k: 1, nu: 1, g: 1, h: 1 };
+    static state(z) {
+        const A = StdAtmosphere;
+        if (!(z >= -5000 - 1e-9 && z <= 86000 + 1e-9)) throw new Error(`atmosphere(): z = ${z} m is outside the standard atmosphere, -5000 to 86000 m (geometric altitude)`);
+        const H = A.R0 * z / (A.R0 + z), k = A.G0 * A.M0 / A.RS;
+        let i = 0; while (i < 6 && H >= A.HB[i + 1]) i++;
+        const Tb = A.base.T[i], Pb = A.base.P[i], L = A.LB[i], dH = H - A.HB[i], TM = Tb + L * dH;
+        const P = L === 0 ? Pb * Math.exp(-k * dH / Tb) : Pb * Math.pow(Tb / TM, k / L);
+        let ratio = 1;
+        if (z > 80000) { const x = (z - 80000) / 500, j = Math.min(Math.floor(x), 11); ratio = A.MZ[j] + (x - j) * (A.MZ[j + 1] - A.MZ[j]); }
+        const T = TM * ratio, rho = P * A.M0 / (A.RS * TM), mu = 1.458e-6 * T ** 1.5 / (T + 110.4);
+        return { t: T, p: P, rho, c: Math.sqrt(A.GAMMA * A.RS * TM / A.M0), mu, k: 2.64638e-3 * T ** 1.5 / (T + 245.4 * 10 ** (-12 / T)), nu: mu / rho,
+            g: A.G0 * (A.R0 / (A.R0 + z)) ** 2, h: H };
+    }
+    static evaluate(name, a) {
+        const A = StdAtmosphere, key = (s) => String(s).trim().toLowerCase();
+        const list = "'T', 'P', 'rho', 'c', 'mu', 'k', 'nu', 'g', 'H'";
+        if (name === 'atmosphere') {
+            if (a.length !== 2) throw new Error("atmosphere(): use atmosphere('output', z), z the geometric altitude in m");
+            const o = key(a[0]); if (!(o in A.OUT)) throw new Error(`atmosphere(): '${a[0]}' should be one of ${list}`);
+            return A.state(ThermoEngine.num(a[1], 'atmosphere() altitude'))[o];
+        }
+        if (a.length !== 2) throw new Error("atmosphere_altitude(): use atmosphere_altitude('P', value) or atmosphere_altitude('rho', value)");
+        const o = key(a[0]), v = ThermoEngine.num(a[1], 'atmosphere_altitude() value');
+        if (o !== 'p' && o !== 'rho') throw new Error(`atmosphere_altitude(): the altitude can be found from 'P' or 'rho' (they fall steadily with altitude), not from '${a[0]}'`);
+        const f = (z) => A.state(z)[o], lo0 = f(86000), hi0 = f(-5000);
+        if (!(v >= lo0 && v <= hi0)) throw new Error(`atmosphere_altitude(): ${o === 'p' ? 'P' : 'rho'} = ${v} is outside the standard atmosphere, ${+lo0.toPrecision(5)} to ${+hi0.toPrecision(5)} ${o === 'p' ? 'Pa' : 'kg/m^3'}`);
+        let lo = -5000, hi = 86000;
+        for (let it = 0; it < 200 && hi - lo > 1e-9; it++) { const m = (lo + hi) / 2; if (f(m) > v) lo = m; else hi = m; }
+        return (lo + hi) / 2;
+    }
+}
+
 // ==========================================
 // 2. THERMODYNAMIC PROPERTY ENGINE (COOLPROP)
 // ==========================================
@@ -814,6 +882,8 @@ class ThermoEngine {
         thermaldiffusivity: { key: 'ALPHA', unit: 'm^2/s', kind: 'state', desc: 'Thermal diffusivity, k/(rho cp)' },
         kinematicviscosity: { key: 'NU', unit: 'm^2/s', kind: 'state', desc: 'Kinematic viscosity, mu/rho' },
         compressibilityfactor: { key: 'Z', unit: '', kind: 'state', desc: 'Compressibility factor, Z = P v / (R T)' },
+        fugacitycoefficient: { key: 'PHI', unit: '', kind: 'state', desc: 'Fugacity coefficient phi = f/P, from ln(phi) = alpha_r + Z - 1 - ln(Z) (alpha_r: reduced residual Helmholtz energy); in two-phase states, that of either saturated phase' },
+        fugacity: { key: 'FUG', unit: 'Pa', kind: 'state', desc: 'Fugacity f = phi P; in two-phase states, that of either saturated phase' },
         isothermalcompressibility: { key: 'isothermal_compressibility', unit: '1/Pa', kind: 'state', desc: 'Isothermal compressibility' },
         volumeexpansion: { key: 'isobaric_expansion_coefficient', unit: '1/K', kind: 'state', desc: 'Volumetric (isobaric) expansion coefficient, beta' },
         isentropicexponent: { key: 'isentropic_expansion_coefficient', unit: '', kind: 'state', desc: 'Isentropic expansion coefficient' },
@@ -861,6 +931,9 @@ class ThermoEngine {
         libr_density: { key: '', unit: 'kg/m^3', kind: 'libr', argUnits: ['K', ''], desc: 'Density of a LiBr-H2O solution: libr_density(T, x)' },
         // --- ammonia-water mixtures (provisional: see the NH3H2O class) ---
         nh3h2o: { key: '', unit: '', kind: 'nh3', desc: "Ammonia-water mixture (provisional model): nh3h2o('output', 'key1', v1, 'key2', v2, 'key3', v3); keys T, P, x (NH3 mass fraction), q, h; outputs T, P, x, h, s, u, v, q, xl, yv" },
+        // --- U.S. Standard Atmosphere 1976, -5 to 86 km ---
+        atmosphere: { key: '', unit: '', kind: 'atm', desc: "U.S. Standard Atmosphere 1976 at geometric altitude z in m (-5 to 86 km): atmosphere('output', z); outputs T, P, rho, c, mu, k, nu, g, H (geopotential altitude)" },
+        atmosphere_altitude: { key: '', unit: 'm', kind: 'atm', desc: "Geometric altitude of the standard atmosphere where the pressure or the density has a value: atmosphere_altitude('P', P) or ('rho', rho)" },
         // --- general access to everything else CoolProp offers ---
         props: { key: '', unit: '', kind: 'props', desc: "props('output', fluid, 'key1', v1, 'key2', v2): any CoolProp output parameter" },
         props1: { key: '', unit: '', kind: 'props1', desc: "props1('output', fluid): any CoolProp fluid constant" },
@@ -920,6 +993,7 @@ class ThermoEngine {
         if (spec.kind === 'ig' || spec.kind === 'igmix') return IdealGas.evaluate(name, a);
         if (spec.kind === 'libr') return LiBrH2O.evaluate(name, a);
         if (spec.kind === 'nh3') return NH3H2O.evaluate(a);
+        if (spec.kind === 'atm') return StdAtmosphere.evaluate(name, a);
         if (spec.kind === 'exergy') {   // physical exergy relative to the same fluid at T0, P0, through the property functions above
             if (a.length !== 5 && a.length !== 7) throw new Error(`${name}(): use ${name}(fluid, T, P, T0, P0) or ${name}(fluid, 'key1', v1, 'key2', v2, T0, P0)`);
             const T0 = ThermoEngine.num(a[a.length - 2], `${name}() T0`), P0 = ThermoEngine.num(a[a.length - 1], `${name}() P0`);
@@ -995,9 +1069,16 @@ class ThermoEngine {
         const [k1, v1, k2, v2] = ThermoEngine.inputs(name, rest);
         if (water) {   // ice, sublimation and vapor below the triple point (above it, CoolProp as usual)
             const st = WaterBelowTriple.state(CP, k1, v1, k2, v2);
+            if (st && (spec.key === 'PHI' || spec.key === 'FUG')) throw new Error(`${name}(): not available for ice or for water vapor below the triple point (273.16 K, 611.657 Pa)`);
             if (st) return st.get(spec.key);
         }
         const get = (out) => check(CP.PropsSI(out, k1, v1, k2, v2, fluid), `${name} of '${fluid}'`);
+        if (spec.key === 'PHI' || spec.key === 'FUG') {   // the same in both saturated phases, so a two-phase state takes the liquid's
+            const q = get('Q'), T = get('T'), P = get('P');
+            const at = (out) => q > 0 && q < 1 ? check(CP.PropsSI(out, 'T', T, 'Q', 0, fluid), `${name} of '${fluid}'`) : get(out);
+            const Z = at('Z'), phi = Math.exp(at('alphar') + Z - 1 - Math.log(Z));
+            return spec.key === 'PHI' ? phi : phi * P;
+        }
         switch (spec.key) {
             case 'V_SPEC': return 1 / get('D');
             case 'ALPHA': return get('L') / (get('D') * get('Cpmass'));

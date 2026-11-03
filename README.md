@@ -31,6 +31,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 **Units**
 - Unit tags such as `[kPa]`, `[W/(m^2 K)]` and `[degC]` on values and results. Calculations are done in SI and results are shown in the unit you choose.
 - **Check** checks the dimensional consistency of every equation and infers units for untagged variables.
+- **Formatted** shows the equations as mathematics (subscripts, dots, Greek letters, fractions) and copies them into Word as editable equations, or as LaTeX.
 - New units can be declared, for example `units $, euro`.
 
 **Properties**
@@ -38,6 +39,11 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - Ideal gases for combustion, from the NASA 7-coefficient polynomials (N2, O2, H2O, CO2, CH4, fuels, radicals): absolute enthalpy, entropy, Gibbs energy and enthalpy of formation.
 - Water in every phase, under the name `'water'` or `'ice'`: ice Ih from the IAPWS equation of state for ice, the sublimation and melting curves, and vapor below the triple point, all on the same reference as CoolProp's water, so latent heats of fusion and sublimation come out of the enthalpies.
 - Solids: conductivity, specific heat, density and diffusivity of the metals and nonmetals in Incropera's Tables A.1 to A.3, interpolated in temperature.
+- The U.S. Standard Atmosphere 1976, from -5 to 86 km: temperature, pressure, density, speed of sound, viscosity, conductivity and gravity, and the pressure or density altitude.
+- Generalized compressibility (Lee–Kesler): Z, the enthalpy and entropy departures and the fugacity coefficient from Tr, Pr and the acentric factor, as in the generalized charts and tables. The fugacity of every CoolProp fluid is available too.
+
+**Compressible flow**
+- Isentropic flow, normal and oblique shocks, Fanno and Rayleigh flow the Prandtl–Meyer function and the mixing of particles into a gas flow (choking by particle loading), for a perfect gas of any k: `isentropic('A/A*', M, k)`, `normalshock('P02/P01', M1, k)`, and so on, with inverse functions that return the subsonic or the supersonic Mach number, as asked.
 
 **Heat transfer correlations**
 - These are named after the correlation, so the choice is visible in the equations: `nu_gnielinski(Re, Pr)`, `nu_churchillchu_plate(Ra, Pr)`, `f_colebrook(Re, eps_D)` (the Moody chart), `cd_sphere(Re)`, `q_rohsenow(...)`, `h_cond_tube(...)`, and so on.
@@ -81,7 +87,8 @@ You can also serve the folder with GitHub Pages or any static web server. Nothin
 | `units.js` | Unit conversion and Check |
 | `thermo.js` | CoolProp interface and NASA ideal-gas data |
 | `solids.js` | Solid property tables |
-| `correlations.js` | Heat transfer and friction correlations |
+| `eqformat.js` | Formatted (MathML) display of the equations |
+| `correlations.js` | Heat transfer and friction correlations, generalized compressibility, compressible flow |
 | `help.html` | The manual |
 | `tests/` | Automated tests (see below) |
 
@@ -123,6 +130,9 @@ Run `node run.mjs --verbose` for details, or `node run.mjs correlations` to run 
 - The Moody chart friction factor uses C. F. Colebrook, "Turbulent flow in pipes, with particular reference to the transition region between the smooth and rough pipe laws," *Journal of the Institution of Civil Engineers* 11(4), 133–156, 1939.
 - The regenerator model follows R. K. Shah and D. P. Sekulić, *Fundamentals of Heat Exchanger Design*, Wiley, 2003, Ch. 5; the Kays and London correlation given for comparison is from W. M. Kays and A. L. London, *Compact Heat Exchangers*, 3rd ed., McGraw-Hill, 1984.
 - Bessel function values were checked against M. Abramowitz and I. A. Stegun, *Handbook of Mathematical Functions*, NBS, 1964. Radiation functions use the CODATA 2018 values of h, c and k.
+- Standard atmosphere: *U.S. Standard Atmosphere, 1976*, NOAA, NASA and USAF, U.S. Government Printing Office, 1976 (NASA TM-X-74335).
+- Generalized compressibility: B. I. Lee and M. G. Kesler, "A generalized thermodynamic correlation based on three-parameter corresponding states," *AIChE Journal* 21(3), 510–527, 1975 ([doi:10.1002/aic.690210313](https://doi.org/10.1002/aic.690210313)).
+- Compressible flow: the perfect-gas relations of J. D. Anderson, *Modern Compressible Flow*, 3rd ed., McGraw-Hill, 2003, and Ames Research Staff, *Equations, Tables, and Charts for Compressible Flow*, NACA Report 1135, 1953. Particle-laden flow: F. Ruiz, "Adiabatic interaction of particles with a compressible flow: basic mechanics," *Journal of Propulsion and Power* 16(3), 415–420, 2000 ([doi:10.2514/2.5605](https://doi.org/10.2514/2.5605)), with the mixture sound speed of G. B. Wallis, *One-Dimensional Two-Phase Flow*, McGraw-Hill, 1969.
 - Sphere drag uses R. Clift and W. H. Gauvin, "The motion of particles in turbulent gas streams," *Proc. Chemeca '70*, Vol. 1, 14–28, 1970, as given in R. Clift, J. R. Grace and M. E. Weber, *Bubbles, Drops, and Particles*, Academic Press, 1978.
 
 **Numerical methods:**

@@ -904,6 +904,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // --- Formatted equations (display only; eqformat.js). The text stays in the editor; click again to edit ---
+    const fmtBtn = document.getElementById('btn-format'), fmtView = document.getElementById('formatted');
+    let fmtItems = [];
+    fmtBtn.addEventListener('click', () => {
+        const on = fmtView.hidden;
+        if (on) {
+            try { fmtItems = EqFormat.render(editor.value); } catch (e) { console.error('Formatted view: ' + e.message); return; }
+            document.getElementById('formatted-body').innerHTML = EqFormat.html(fmtItems) || '<p class="fe-empty">No equations.</p>';
+            document.getElementById('fe-note').textContent = '';
+        }
+        fmtView.hidden = !on;
+        document.getElementById('editor-gutter').hidden = on;
+        document.getElementById('editor-box').hidden = on;
+        fmtBtn.textContent = on ? 'Text' : 'Formatted';
+        if (!on) editor.focus();
+    });
+    const copyEqs = (items, what) => {   // as web content (Word makes equations of the MathML) and as LaTeX text
+        const note = document.getElementById('fe-note'), blob = (t, type) => new Blob([t], { type });
+        const done = () => { note.textContent = `${what} copied: paste into Word, or into a LaTeX editor.`; };
+        const fail = () => { note.textContent = 'The browser did not allow copying; select the equations and press Ctrl+C instead.'; };
+        if (window.ClipboardItem && navigator.clipboard.write) {
+            navigator.clipboard.write([new ClipboardItem({ 'text/html': blob(EqFormat.clipboardHtml(items), 'text/html'), 'text/plain': blob(EqFormat.clipboard(items), 'text/plain') })]).then(done).catch(fail);
+        } else navigator.clipboard.writeText(EqFormat.clipboard(items)).then(done).catch(fail);
+    };
+    document.getElementById('btn-copy-word').addEventListener('click', () => copyEqs(fmtItems, `${fmtItems.filter(it => it.math).length} equation(s)`));
+    document.getElementById('formatted-body').addEventListener('click', (e) => {
+        const eq = e.target.closest('.fe-eq');
+        if (eq) copyEqs([fmtItems.filter(it => it.math)[[...document.querySelectorAll('#formatted-body .fe-eq')].indexOf(eq)]], 'The equation');
+    });
+
     // --- Close modals by clicking the dark backdrop (or pressing Escape) ---
     ['inspector-modal', 'optimize-modal', 'image-modal'].forEach(id => {
         const overlay = document.getElementById(id);
