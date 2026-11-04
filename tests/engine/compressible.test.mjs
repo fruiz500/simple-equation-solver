@@ -128,5 +128,14 @@ ok('particleflow_ms: back to the loading for M2, T2/T1 and P2/P1; M2 = 1 gives t
   const ms = 0.6 * P('ms_choke', M1, ML, 0); return near(C('particleflow_ms', r, P(r, M1, ML, ms), M1, ML, 1.4), ms, 1e-9); }) && near(C('particleflow_ms', 'M2', 1, 0.8, 0.5, 1.4), P('ms_choke', 0.8, 0.5, 0), 1e-9));
 ok('particleflow_ms without choking (ML = 2 > M1, M2 falls as ms grows): M2 = 0.6 found', (() => { const ms = C('particleflow_ms', 'M2', 0.6, 0.8, 2, 1.4); return near(P('M2', 0.8, 2, ms), 0.6, 1e-10); })());
 messages([['reach', err(`z = particleflow_ms('M2', 0.7, 0.8, 0.5, 1.4)`), /particleflow_ms\(\): no ms gives M2 = 0\.7; from ms = 0 to the choking ms = 0\.087491 it covers 0\.8 to 1/]]);
+ok('the equations of Ruiz (2000), Eqs. 8 and 9 (Eq. 8 with the square on the (kM2 + 1/M2) factor, which momentum requires), for both branches', (() => {
+  let w = 0, n = 0; const k = 1.4;
+  for (const M1 of [0.5, 0.8, 1.5]) for (const ML of [0, 0.3, 0.6, 1.2]) { let top; try { top = P('ms_choke', M1, ML, 0); } catch (e) { top = 4; }
+    for (const f of [0.2, 0.6, 0.95]) for (const br of ['subsonic', 'supersonic']) { const ms = f * Math.min(top, 4); let M2, t;
+      try { M2 = P('M2', M1, ML, ms, br); t = P('T2/T1', M1, ML, ms, br); } catch (e) { continue; }
+      w = Math.max(w, Math.abs(t * (k * M2 + 1 / M2) ** 2 * (1 + ms) / (k * ML * ms + k * M1 + 1 / M1) ** 2 - 1), Math.abs(t * (2 / (k - 1) + M2 * M2) / (2 / (k - 1) + M1 * M1 + ML * ML * ms) - 1)); n++; } }
+  return n > 20 && w < 1e-12; })());
+ok('Eq. 11: choking loading at ML = 0 for M1 = 0.3, 0.8, 1.5, 3', [0.3, 0.8, 1.5, 3].every(M1 => near(P('ms_choke', M1, 0, 0), (1 / M1 - M1) ** 2 / ((1 + 1.4) * (2 + 0.4 * M1 * M1)), 1e-12)));
+messages([['no supersonic', err(`z = particleflow('M2', 0.3, 0.2, 0.1, 1.4, 'supersonic')`), /there is no supersonic solution here: the subsonic one has M2 below 0\.378/]]);
 messages([['choked', err(`z = particleflow('M2', 0.8, 0.5, 0.2, 1.4)`), /particleflow\(\): no solution: the particles choke the flow \(M2 = 1 at ms = 0\.087491\)/]]);
 done();
