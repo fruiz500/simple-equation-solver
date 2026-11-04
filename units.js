@@ -427,7 +427,7 @@ class UnitConsistencyChecker {
             }
             const a = node.args.map(x => U.dimOf(x, ctx));
             const DIMLESS_IN = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh',
-                'asinh', 'acosh', 'atanh', 'exp', 'expm1', 'log', 'log10', 'log2', 'log1p', 'ln', 'erf'];
+                'asinh', 'acosh', 'atanh', 'exp', 'expm1', 'log', 'log10', 'log2', 'log1p', 'ln', 'erf', 'erfinv', 'expint', 'gammainc', 'betainc', 'tcdf', 'tinv', 'factorialln'];
             if (DIMLESS_IN.includes(name)) {
                 if (ctx.infer) node.args.forEach((x, i) => { if (a[i].k === 'unk') U.inferDown(x, U.mk(U.zero()), ctx); });
                 a.forEach(x => {
@@ -437,6 +437,13 @@ class UnitConsistencyChecker {
             }
             if (['abs', 'ceil', 'floor', 'round', 'fix', 'min', 'max', 'hypot', 'mod'].includes(name)) return U.addDims(a, ctx, node);
             if (name === 'atan2') { U.addDims(a, ctx, node); return a.every(x => x.k === 'lit') ? U.LIT : U.mk(U.zero()); }
+            if (name === 'trapz' || name === 'cumtrapz') {   // the integral of y dx: [x] [y]; with y alone, [y]
+                if (a.length === 1) return a[0];
+                return U.isDim(a[0]) && U.isDim(a[1]) ? U.mk(a[0].d.map((v, i) => v + (a[1].d[i] || 0))) : U.UNK;
+            }
+            if (name === 'linspace') return U.addDims(a.slice(0, 2), ctx, node);
+            if (name === 'normcdf') { if (a.length > 1) U.addDims(a, ctx, node); return U.mk(U.zero()); }
+            if (name === 'norminv') return a.length > 1 ? U.addDims(a.slice(1), ctx, node) : U.mk(U.zero());
             if (name === 'sqrt') return U.scale(a[0], 0.5);
             if (name === 'cbrt') return U.scale(a[0], 1 / 3);
             if (name === 'square') return U.scale(a[0], 2);
