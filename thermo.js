@@ -633,13 +633,19 @@ class LiBrH2O {
 }
 
 // ==========================================
-// Ammonia-water mixtures, PROVISIONAL: the Gibbs-energy model of Ibrahim and Klein (ASHRAE Trans. 99(1), 1993, 1495-1502),
-// the model used by EES, but with the coefficients of Ziegler and Trepp (Int. J. Refrig. 7 (1984) 101-106), from which
-// Ibrahim and Klein started; their own modified coefficients are to replace these. Pure liquids and gases: reduced Gibbs
-// energies (TB = 100 K, PB = 10 bar); liquid mixture: ideal mixing plus a three-term excess Gibbs energy; vapor mixture:
-// ideal solution; phase equilibrium from equal chemical potentials. Reference state as in EES. Measured against EES:
-// single-phase states agree closely; saturation temperatures differ by up to about 1.5 K and saturated enthalpies by up
-// to about 10 kJ/kg. x is the ammonia MASS fraction; SI units outside, kJ, kmol and bar inside.
+// Ammonia-water mixtures: the model of O. M. Ibrahim and S. A. Klein, Thermodynamic properties of ammonia-water mixtures,
+// ASHRAE Trans. 99(1) (1993) 1495-1502, the one EES uses. Pure liquids and gases: reduced Gibbs energies (Eqs. 6 and 7, with the
+// coefficients of Table 1, from Ziegler and Trepp, Int. J. Refrig. 7 (1984) 101-106; TB = 100 K, PB = 10 bar); liquid mixture:
+// ideal mixing plus a three-term excess Gibbs energy (Eqs. 15-18, Table 2); vapor mixture: ideal solution; equilibrium from the
+// fugacities (Eqs. 33-43), with the Poynting factors taken as 1 as the paper allows below 30 bar. The tables and equations were
+// checked against the paper. Printed errors corrected: in Eq. 7 the second term of the C2 group has T_r,o^3, not T_r^3
+// (the M-PROPATH correction); Eq. 15 is G^E = x (1 - x) {...}; Eq. 41 has no last term 12 F3 (1 - x)^4 (gamma of water would not
+// tend to 1 for pure water). Reference state as in EES. Against 30 states computed with EES (tests/engine/nh3h2o.test.mjs):
+// saturation temperatures within 0.8 K up to 360 K and within 1.5 K from there to 490 K (up to 100 bar), bubble pressure within 0.1 %,
+// compositions within 0.004, liquid enthalpy within 2 kJ/kg; the vapor enthalpy of ammonia is 6.0 kJ/kg lower than EES at every
+// temperature and pressure (EES's own h and s do not satisfy h_fg = T s_fg; the model's do). From about 355 K the ammonia f0 of EES
+// falls below the recipe of the paper (corrA, fitted to 13 EES states). Not checked: pressures above 100 bar, temperatures above 490 K.
+// x is the ammonia MASS fraction; SI units outside, kJ, kmol and bar inside.
 class NH3H2O {
     static R = 8.314; static TB = 100; static PB = 10;                    // kJ/(kmol K), K, bar
     static MA = 17.03026; static MW = 18.0153;                            // kg/kmol
@@ -689,12 +695,57 @@ class NH3H2O {
         const g = G(x, Tr, Pr), sr = -(G(x, Tr + dT, Pr) - G(x, Tr - dT, Pr)) / (2 * dT), vr = (G(x, Tr, Pr + dP) - G(x, Tr, Pr - dP)) / (2 * dP);
         return { h: N.R * N.TB * (g + Tr * sr) / M, s: N.R * sr / M, v: N.R * N.TB / N.PB / 100 * vr / M };
     }
+    // Equilibrium (Eqs. 33-43): the fugacity of each component in the liquid, gamma x f0, equals that in the vapor, phi P y.
+    // f0 is the fugacity of the pure saturated liquid, phi_sat P_sat (the Poynting factors are taken as 1); above the critical
+    // temperature of ammonia (405.4 K), where it has no saturation pressure, Gillespie's Eq. 39, shifted to join the saturated
+    // value at 405.4 K (the paper gives no joining rule). phi is the fugacity coefficient of the pure gas, from the real-gas
+    // terms of Eq. 7.
+    static lnphi(c, T, P) {
+        const Tr = T / NH3H2O.TB, Pr = P / NH3H2O.PB, C = c.C;
+        return (C[0] * Pr + C[1] * Pr / Tr ** 3 + C[2] * Pr / Tr ** 11 + C[3] * Pr ** 3 / (3 * Tr ** 11)) / Tr;
+    }
+    static psat(c, T) {   // pure-component saturation pressure [bar], from G(liquid) = G(gas); NaN if there is none
+        const N = NH3H2O, Tr = T / N.TB, f = (lp) => N.GL(c, Tr, Math.exp(lp)) - N.GG(c, Tr, Math.exp(lp));
+        let lp = Math.log(1e-8), p = f(lp);
+        for (; lp < Math.log(150); lp += 0.05) {
+            const q = f(lp + 0.05);
+            if ((q < 0) !== (p < 0)) return N.PB * Math.exp(N.bisect(f, lp, lp + 0.05, 60));
+            p = q;
+        }
+        return NaN;
+    }
+    static TCA = 405.4;   // critical temperature of ammonia, K
+    static gillespie(T) { const z = 1000 / T; return 10.7215 - 4.9319 * z + 1.4992 * z * z - 0.236202 * z ** 3; }   // ln f0 of ammonia, f0 in bar
+    // EES's ammonia f0 falls below the recipe above (saturated value, then Gillespie's equation) from about 355 K: by 0.01 at 366 K, 0.03
+    // at 387 K, 0.07 at 400 K, 0.12 at 435 K and about 0.13 beyond, independently of pressure. Fitted to 13 EES states (rms 0.007 in ln f0).
+    static corrA(T) { const t = Math.max(0, (T - 354.93) / 54.27); return -0.12960 * (1 - Math.exp(-t * t)); }
+    static lnSat(c, T) { const Ps = NH3H2O.psat(c, T); return Math.log(Ps) + NH3H2O.lnphi(c, T, Ps); }
+    static f0cache = new Map();
+    static lnf0Grid(which, T) {   // ln f0 at an integer T, cached
+        const N = NH3H2O, key = which + T;
+        let v = N.f0cache.get(key);
+        if (v === undefined) {
+            if (which === 'w' || T < N.TCA) v = N.lnSat(which === 'a' ? N.C.a : N.C.w, T);
+            if (which === 'a' && !Number.isFinite(v)) {
+                if (N.shiftA === undefined) N.shiftA = N.lnSat(N.C.a, N.TCA) - N.gillespie(N.TCA);
+                v = N.gillespie(T) + N.shiftA;
+            }
+            if (!Number.isFinite(v)) throw new Error(`nh3h2o(): T = ${T} K is outside the formulation`);
+            if (which === 'a') v += N.corrA(T);
+            N.f0cache.set(key, v);
+        }
+        return v;
+    }
+    static lnf0(which, T) { const N = NH3H2O, k = Math.floor(T), a = N.lnf0Grid(which, k), b = N.lnf0Grid(which, k + 1); return a + (b - a) * (T - k); }
     // ammonia and water mole fractions of the vapor in equilibrium with liquid x (they add up to 1 at equilibrium)
     static yOf(x, T, P) {
-        const N = NH3H2O, Tr = T / N.TB, Pr = P / N.PB, e = 1e-7;
-        const lo = Math.max(x - e, 1e-12), hi = Math.min(x + e, 1 - 1e-12);
-        const g = N.GmL(x, Tr, Pr), dg = (N.GmL(hi, Tr, Pr) - N.GmL(lo, Tr, Pr)) / (hi - lo);
-        return [Math.exp((g + (1 - x) * dg - N.GG(N.C.a, Tr, Pr)) / Tr), Math.exp((g - x * dg - N.GG(N.C.w, Tr, Pr)) / Tr)];
+        const N = NH3H2O, E = N.E, Tr = T / N.TB, Pr = P / N.PB, u = 1 - x;
+        const F1 = E[0] + E[1] * Pr + (E[2] + E[3] * Pr) * Tr + E[4] / Tr + E[5] / Tr ** 2;
+        const F2 = E[6] + E[7] * Pr + (E[8] + E[9] * Pr) * Tr + E[10] / Tr + E[11] / Tr ** 2;
+        const F3 = E[12] + E[13] * Pr + E[14] / Tr + E[15] / Tr ** 2;
+        const lga = ((F1 + 3 * F2 + 5 * F3) * u * u - 4 * (F2 + 4 * F3) * u ** 3 + 12 * F3 * u ** 4) / Tr;   // Eq. 40
+        const lgw = ((F1 - 3 * F2 + 5 * F3) * x * x + 4 * (F2 - 4 * F3) * x ** 3 + 12 * F3 * x ** 4) / Tr;   // Eq. 41
+        return [x * Math.exp(lga + N.lnf0('a', T) - N.lnphi(N.C.a, T, P)) / P, u * Math.exp(lgw + N.lnf0('w', T) - N.lnphi(N.C.w, T, P)) / P];
     }
     static bisect(f, lo, hi, n = 80) {   // f(lo) and f(hi) of opposite signs
         let flo = f(lo);
@@ -704,9 +755,10 @@ class NH3H2O {
     // bubble temperature of liquid x (mole) at P, and the vapor in equilibrium
     static bubble(x, P) {
         const N = NH3H2O, f = (T) => { const [a, w] = N.yOf(x, T, P); return a + w - 1; };
-        // scan down from 700 K to the first crossing, then bisect: at low T and high P the gas terms (in 1/T^11) misbehave
-        let hi = 700;
-        if (!(f(hi) > 0)) throw new Error('nh3h2o(): no bubble temperature found below 700 K');
+        // scan down from 600 K (the top of the range; water has no saturation pressure above its critical point) to the first
+        // crossing, then bisect: at low T and high P the gas terms (in 1/T^11) misbehave
+        let hi = 600;
+        if (!(f(hi) > 0)) throw new Error('nh3h2o(): no bubble temperature found below 600 K');
         while (hi > 225 && f(hi - 5) > 0) hi -= 5;
         if (hi <= 225) throw new Error(`nh3h2o(): at P = ${(P * 1e5).toPrecision(4)} Pa this liquid boils below 225 K, outside the formulation`);
         const T = N.bisect(f, hi - 5, hi, 60), [a, w] = N.yOf(x, T, P);
@@ -731,8 +783,13 @@ class NH3H2O {
         return N.mix(T, P, z, xl, yv, (z - xl) / (yv - xl));
     }
     static dewT(y, P) {   // dew temperature of vapor y (mole) at P: the equilibrium vapor gets leaner in ammonia as T rises
-        const N = NH3H2O, Ta = N.bubble(1 - 1e-10, P).T, Tw = N.bubble(1e-10, P).T;
-        return N.bisect((T) => { const eq = N.equilibrium(T, P); return eq ? eq.y - y : (T < (Ta + Tw) / 2 ? 1 : -1); }, Ta + 1e-9, Tw - 1e-9);
+        const N = NH3H2O;
+        // the two-phase window lies between the boiling points of pure ammonia and pure water (at very low P ammonia boils
+        // below 230 K, the bottom of the range)
+        let Ta = 230;
+        try { Ta = N.bubble(1 - 1e-10, P).T; } catch (e) { if (!/boils below 225 K/.test(e.message)) throw e; }
+        const Tw = N.bubble(1e-10, P).T;
+        return N.bisect((T) => { const eq = N.equilibrium(T, P); return eq ? eq.y - y : (T < (Ta + Tw) / 2 ? 1 : -1); }, Math.max(Ta, 230) + 1e-9, Tw - 1e-9);
     }
     static single(kind, T, P, z) {
         const N = NH3H2O, p = N.phase(kind === 'liquid' ? N.GmL : N.GmG, N.mole(z), T, P);
@@ -929,8 +986,8 @@ class ThermoEngine {
         libr_entropy: { key: '', unit: 'J/(kg K)', kind: 'libr', argUnits: ['K', ''], desc: 'Specific entropy of a LiBr-H2O solution: libr_entropy(T, x)' },
         libr_cp: { key: '', unit: 'J/(kg K)', kind: 'libr', argUnits: ['K', ''], desc: 'Specific heat of a LiBr-H2O solution: libr_cp(T, x)' },
         libr_density: { key: '', unit: 'kg/m^3', kind: 'libr', argUnits: ['K', ''], desc: 'Density of a LiBr-H2O solution: libr_density(T, x)' },
-        // --- ammonia-water mixtures (provisional: see the NH3H2O class) ---
-        nh3h2o: { key: '', unit: '', kind: 'nh3', desc: "Ammonia-water mixture (provisional model): nh3h2o('output', 'key1', v1, 'key2', v2, 'key3', v3); keys T, P, x (NH3 mass fraction), q, h; outputs T, P, x, h, s, u, v, q, xl, yv" },
+        // --- ammonia-water mixtures (Ibrahim and Klein 1993: see the NH3H2O class) ---
+        nh3h2o: { key: '', unit: '', kind: 'nh3', desc: "Ammonia-water mixture (Ibrahim and Klein): nh3h2o('output', 'key1', v1, 'key2', v2, 'key3', v3); keys T, P, x (NH3 mass fraction), q, h; outputs T, P, x, h, s, u, v, q, xl, yv" },
         // --- U.S. Standard Atmosphere 1976, -5 to 86 km ---
         atmosphere: { key: '', unit: '', kind: 'atm', desc: "U.S. Standard Atmosphere 1976 at geometric altitude z in m (-5 to 86 km): atmosphere('output', z); outputs T, P, rho, c, mu, k, nu, g, H (geopotential altitude)" },
         atmosphere_altitude: { key: '', unit: 'm', kind: 'atm', desc: "Geometric altitude of the standard atmosphere where the pressure or the density has a value: atmosphere_altitude('P', P) or ('rho', rho)" },
