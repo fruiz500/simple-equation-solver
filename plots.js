@@ -100,7 +100,7 @@ class PlotLines {
         const sat = PlotLines.dome(fluid, D);
         const conv = (a, u) => a.map(v => PlotLines.fromSI(v, u));
         const data = [{ type: 'scatter', mode: 'lines', name: 'saturation', x: conv(sat.x, ux), y: conv(sat.y, uy), line: { color: '#888888', width: 1.5 }, hoverinfo: 'x+y' }];
-        let curved = 0, straight = 0;
+        let curved = 0, straight = 0, nbars = 0;
         if (xs) {
             const idx = ys.map((v, i) => i).filter(i => Number.isFinite(ys[i]) && Number.isFinite(xs[i]));
             const segs = idx.slice(1).map((j, k) => [idx[k], j]);
@@ -114,8 +114,16 @@ class PlotLines {
             }
             data.push({ type: 'scatter', mode: 'lines', name: 'processes', x: solid.x, y: solid.y, line: { color: '#1f77b4', width: 2 }, hoverinfo: 'skip' });
             data.push({ type: 'scatter', mode: 'lines', name: 'other processes (straight)', x: dash.x, y: dash.y, line: { color: '#1f77b4', width: 1.5, dash: 'dash' }, hoverinfo: 'skip' });
+            // error bars from the propagated uncertainties (ctx.unc: name -> u in SI), for arrays given by name
+            const bars = (names_, vals, unit) => {
+                const sym = names_ && /^[A-Za-z_]\w*$/.test(names_);
+                const e = idx.map(i => { const u = sym && ctx.unc ? ctx.unc.get(`${names_}[${i + 1}]`) : 0; return u > 0 ? Math.abs(PlotLines.fromSI(vals[i] + u, unit) - PlotLines.fromSI(vals[i], unit)) : 0; });
+                return e.some(v => v > 0) ? { type: 'data', array: e, visible: true, thickness: 1.2, width: 4 } : undefined;
+            };
+            const ey = bars(names[0], ys, uy), ex = bars(names[1], xs, ux);
+            if (ey || ex) nbars = (ey ? 1 : 0) + (ex ? 1 : 0);
             data.push({
-                type: 'scatter', mode: 'markers+text', name: 'states', x: idx.map(i => PlotLines.fromSI(xs[i], ux)), y: idx.map(i => PlotLines.fromSI(ys[i], uy)),
+                type: 'scatter', mode: 'markers+text', name: 'states', error_x: ex, error_y: ey, x: idx.map(i => PlotLines.fromSI(xs[i], ux)), y: idx.map(i => PlotLines.fromSI(ys[i], uy)),
                 text: idx.map(i => String(i + 1)), textposition: 'top right', cliponaxis: false, marker: { size: 7, color: '#1f77b4' },
             });
         }
@@ -123,7 +131,7 @@ class PlotLines {
         return {
             data, logx: D.logx, logy: D.logy,
             layout: { xaxis: { title: lab(QX, ux) }, yaxis: { title: lab(QY, uy) }, showlegend: false, title: { text: `${fluid}: ${D.y}-${D.x} diagram`, font: { size: 13 }, x: 0.02, xanchor: 'left' } },
-            note: xs ? `${xs.length} state(s) from ${names.join(' and ')}; ${curved} process(es) drawn at constant P, T, s or h, ${straight} joined by straight dashed lines`
+            note: xs ? `${xs.length} state(s) from ${names.join(' and ')}; ${curved} process(es) drawn at constant P, T, s or h, ${straight} joined by straight dashed lines${nbars ? '; error bars from the uncertainties' : ''}`
                 : `no arrays ${names.join(' and ')} in the results: the dome only`,
         };
     }

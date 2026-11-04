@@ -169,7 +169,31 @@ const EqFormat = (() => {
     // indep: the independent variable of the ode block the line is in (the same line forms as OdeBlocks.compile)
     const ODE_NAME = '([A-Za-z_]\\w*(?:\\[[^\\]]*\\])?)';
     const ODE_D = new RegExp(`^${ODE_NAME}\\s*'\\s*=\\s*(.+)$`), ODE_I = new RegExp(`^${ODE_NAME}\\s*\\((.+)\\)\\s*=\\s*(.+)$`);
+    // [t, y] = ode45(@(a, b) f, [t0, t1], y0)  ->  dy/dt = f (a, b written as t, y),   y(t0) = y0,   t0 <= t <= t1
+    const ODE45 = /^\[\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\]\s*=\s*ode45\s*\(\s*@\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)(.*)\)\s*$/s;
+    function ode45(text) {
+        const m = text.match(ODE45);
+        if (!m) return null;
+        const parts = [];   // the rest split at the commas outside brackets: body, [t0, t1], y0
+        let depth = 0, cur = '';
+        for (const c of m[5]) { if ('([{'.includes(c)) depth++; if (')]}'.includes(c)) depth--; if (c === ',' && depth === 0) { parts.push(cur); cur = ''; } else cur += c; }
+        parts.push(cur);
+        if (parts.length < 3) return null;
+        try {
+            const tv = math.parse(m[1]), yv = math.parse(m[2]), ren = { [m[3]]: m[1], [m[4]]: m[2] };
+            const f = math.parse(parts.slice(0, -2).join(',')).transform(n => (n.isSymbolNode && ren[n.name] && n.name !== ren[n.name]) ? new math.SymbolNode(ren[n.name]) : n);
+            const span = strip(math.parse(parts[parts.length - 2])), y0 = math.parse(parts[parts.length - 1]);
+            if (!span.isArrayNode || span.items.length !== 2) return null;
+            const [t0, t1] = span.items, gap = '<mspace width="2em"/>', le = '<mo>≤</mo>';
+            return {
+                math: `<math xmlns="${NS}" displaystyle="true"><mrow><mfrac><mrow><mi mathvariant="normal">d</mi>${ml(yv)}</mrow><mrow><mi mathvariant="normal">d</mi>${ml(tv)}</mrow></mfrac><mo>=</mo>${ml(f)}${gap}` +
+                    `<mrow>${ml(yv)}${paren(ml(strip(t0)))}</mrow><mo>=</mo>${ml(y0)}${gap}${ml(t0)}${le}${ml(tv)}${le}${ml(t1)}</mrow></math>`,
+                tex: `\\frac{\\mathrm{d}${tex(yv)}}{\\mathrm{d}${tex(tv)}} = ${tex(f)},\\qquad ${tex(yv)}${tparen(tex(strip(t0)))} = ${tex(y0)},\\qquad ${tex(t0)} \\leq ${tex(tv)} \\leq ${tex(t1)}`,
+            };
+        } catch (e) { return null; }
+    }
     function equation(line, indep) {
+        if (!indep) { const o = ode45(line.trim()); if (o) return o; }
         let text = line.trim(), unit = '';
         const unc = indep ? null : EESParser.splitUncertainty(text);   // T = 300 [K] +- 2  ->  T = 300 ± 2 [K]
         if (unc) text = unc.head;

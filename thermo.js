@@ -921,6 +921,86 @@ class StdAtmosphere {
 // 30 deg. lat in radians. oceanpressure inverts it by bisection.
 class Seawater {
     static OUT = { rho: 1, cp: 1, k: 1, mu: 1, nu: 1, alpha: 1, pr: 1, bpe: 1 };
+    static TEOS = { h: 1, s: 1, g: 1, muw: 1, aw: 1, phi: 1, pi: 1 };   // from the TEOS-10 Gibbs function, at any pressure
+    // Saline part of the TEOS-10 Gibbs function, IAPWS R13-08 Eq. (4) with the 64 coefficients of its Table 2 (Feistel 2008):
+    // g^S/g* = (g100 + g110 tau) xi^2 ln xi + sum of g_ijk xi^i tau^j pi^k, xi = sqrt(S_A/S*) with S* = S_n 40/35, tau = t/40 K,
+    // pi = (p - p0)/1e8 Pa. Verified against the release's check values and the TEOS-10 GSW-C library.
+    // Rows [i, j, k, g_ijk] for i >= 2; G100 and G110 are the two terms of the ideal-solution logarithm.
+    static G100 = 5812.81456626732; static G110 = 851.226734946706;
+    static GIJK = [
+        [2, 0, 0, 1416.27648484197], [2, 0, 1, -3310.49154044839], [2, 0, 2, 384.794152978599],
+        [2, 0, 3, -96.5324320107458], [2, 0, 4, 15.8408172766824], [2, 0, 5, -2.62480156590992],
+        [2, 1, 0, 168.072408311545], [2, 1, 1, 729.116529735046], [2, 1, 2, -343.956902961561],
+        [2, 1, 3, 124.687671116248], [2, 1, 4, -31.656964386073], [2, 1, 5, 7.04658803315449],
+        [2, 2, 0, 880.031352997204], [2, 2, 1, -860.764303783977], [2, 2, 2, 337.409530269367],
+        [2, 2, 3, -178.314556207638], [2, 2, 4, 44.2040358308], [2, 2, 5, -7.92001547211682],
+        [2, 3, 0, -225.267649263401], [2, 3, 1, 694.244814133268], [2, 3, 2, -204.889641964903],
+        [2, 3, 3, 113.561697840594], [2, 3, 4, -11.1282734326413], [2, 4, 0, 91.4260447751259],
+        [2, 4, 1, -297.728741987187], [2, 4, 2, 74.726141138756], [2, 4, 3, -36.4872919001588],
+        [2, 5, 0, -21.6603240875311], [2, 6, 0, 2.13016970847183], [3, 0, 0, -2432.14662381794],
+        [3, 0, 1, 199.459603073901], [3, 0, 2, -52.2940909281335], [3, 0, 3, 68.0444942726459],
+        [3, 0, 4, -3.41251932441282], [3, 1, 0, -493.407510141682], [3, 1, 1, -175.292041186547],
+        [3, 1, 2, 83.1923927801819], [3, 1, 3, -29.483064349429], [3, 2, 0, -43.0664675978042],
+        [3, 2, 1, 383.058066002476], [3, 2, 2, -54.1917262517112], [3, 2, 3, 25.6398487389914],
+        [3, 3, 0, -10.0227370861875], [3, 3, 1, -460.319931801257], [3, 4, 0, 0.875600661808945],
+        [3, 4, 1, 234.565187611355], [4, 0, 0, 2025.80115603697], [4, 0, 1, -54.7919133532887],
+        [4, 0, 2, -4.08193978912261], [4, 0, 3, -30.1755111971161], [4, 1, 0, 543.835333000098],
+        [4, 1, 1, -22.6683558512829], [4, 2, 0, -68.5572509204491], [4, 3, 0, 49.3667694856254],
+        [4, 4, 0, -17.1397577419788], [4, 5, 0, 2.49697009569508], [5, 0, 0, -1091.66841042967],
+        [5, 0, 1, 36.0284195611086], [5, 1, 0, -196.028306689776], [6, 0, 0, 374.60123787784],
+        [6, 1, 0, 36.7571622995805], [7, 0, 0, -48.5891069025409]];
+    // d = '000' (g^S, J/kg), '100' (dg/dS_A, J/kg per g/kg), '010' (dg/dt, J/(kg K)), '001' (dg/dp, m^3/kg).
+    // S_A in g/kg, t in degC, p the sea pressure in dbar (absolute pressure - 101325 Pa, in units of 1e4 Pa).
+    static gS(d, sa, t, p) {
+        const SU = 35.16504 * 40 / 35, xi2 = sa / SU, xi = Math.sqrt(xi2), tau = t / 40, pi = p * 1e-4, L = Seawater.G100 + Seawater.G110 * tau;
+        let v = 0;
+        if (d === '000') { for (const [i, j, k, c] of Seawater.GIJK) v += c * xi ** i * tau ** j * pi ** k; return sa > 0 ? v + L * xi2 * Math.log(xi) : v; }
+        if (d === '010') { for (const [i, j, k, c] of Seawater.GIJK) if (j) v += c * xi ** i * j * tau ** (j - 1) * pi ** k; return (sa > 0 ? v + Seawater.G110 * xi2 * Math.log(xi) : v) / 40; }
+        if (d === '001') { for (const [i, j, k, c] of Seawater.GIJK) if (k) v += c * xi ** i * tau ** j * k * pi ** (k - 1); return v * 1e-8; }
+        if (d === '100') {   // d/dS_A = (d xi/dS_A) d/d xi, d xi/dS_A = 1/(2 xi S*); at S_A = 0 the logarithm makes it infinite, and 0 is returned
+            if (!(sa > 0)) return 0;
+            for (const [i, j, k, c] of Seawater.GIJK) v += c * i * xi ** (i - 1) * tau ** j * pi ** k;
+            return (v + L * (2 * xi * Math.log(xi) + xi)) / (2 * xi * SU);
+        }
+        throw new Error('Seawater.gS: derivative ' + d);
+    }
+    // Seawater of Reference Composition by TEOS-10: g = g_W(T, P) + g^S(S_A, T, P), with g_W from IAPWS-95 (CoolProp,
+    // the water part IAPWS R13-08 is built on) and g^S above. S in kg/kg, T in K, P absolute in Pa. Outputs: h, s, g (per kg
+    // of seawater), muw (chemical potential of water, J/kg of water), aw (water activity), phi (osmotic coefficient), and
+    // pi (osmotic pressure: pure water at P balances seawater at P + pi). IAPWS R13-08, sections 4 and 5.
+    static R = 8.314472; static MS = 0.0314038218; static MW = 0.018015268;   // J/(mol K), kg/mol (R13-08; MW from IAPWS-95)
+    static teos(o, T, S, P) {
+        const t = T - 273.15;
+        if (!(T >= 273.15 - 1e-9 && T <= 353.15 + 1e-9)) throw new Error(`seawater('${o}'): T = ${T} K is outside the TEOS-10 seawater range used here, 273.15 to 353.15 K (0 to 80 degC)`);
+        if (!(S >= 0 && S <= 0.12)) throw new Error(`seawater('${o}'): S = ${S} is outside 0 to 0.12 kg/kg (0 to 120 g/kg); give the salinity in kg/kg, e.g. 0.035`);
+        const Pmax = S <= 0.042 ? 1e8 : 1.2e7;
+        if (!(P >= 1e4 && P <= Pmax)) throw new Error(`seawater('${o}'): P = ${P} Pa is outside 1e4 to ${Pmax} Pa (${S <= 0.042 ? '100 MPa' : '12 MPa above 42 g/kg'}); P is the absolute pressure`);
+        const CP = ThermoEngine.CP, W = (k, p) => { const v = CP.PropsSI(k, 'T', T, 'P', p, 'Water'); if (!Number.isFinite(v)) ThermoEngine.fail(CP, `water ${k} at T = ${T} K, P = ${p} Pa`); return v; };
+        const SA = S * 1000, sea = (p) => (p - 101325) / 1e4, G = Seawater.gS;
+        const muS = (p) => G('000', SA, t, sea(p)) - SA * G('100', SA, t, sea(p));   // saline part of the chemical potential of water
+        if (o === 'h') return W('Hmass', P) + G('000', SA, t, sea(P)) - T * G('010', SA, t, sea(P));
+        if (o === 's') return W('Smass', P) - G('010', SA, t, sea(P));
+        if (o === 'g') return W('Gmass', P) + G('000', SA, t, sea(P));
+        if (o === 'muw') return W('Gmass', P) + muS(P);
+        if (o === 'aw') return Math.exp(muS(P) * Seawater.MW / (Seawater.R * T));
+        if (o === 'phi') return S === 0 ? 1 : -muS(P) * (1 - S) * Seawater.MS / (S * Seawater.R * T);   // m = S/((1 - S) MS)
+        if (o === 'pi') {   // g_W(T, P) = g_W(T, P + pi) + muS(P + pi)
+            if (S === 0) return 0;
+            const gw = W('Gmass', P), f = (x) => W('Gmass', P + x) + muS(P + x) - gw;
+            let x = -muS(P) * W('Dmass', P), fx;   // first guess: pi = -muS rho_w
+            for (let it = 0; it < 50; it++) {
+                fx = f(x);
+                const d = 1 / W('Dmass', P + x) + G('001', SA, t, sea(P + x)) - SA * Seawater.gSP(SA, t, sea(P + x));
+                const dx = fx / d; x -= dx;
+                if (Math.abs(dx) < 1e-9 * Math.max(x, 1)) break;
+            }
+            return x;
+        }
+        throw new Error(`seawater(): no output '${o}'`);
+    }
+    static gSP(sa, t, p) {   // d2g^S/(dS_A dp), by a central difference in p (only for the Newton step of pi)
+        const h = 1; return (Seawater.gS('100', sa, t, p + h) - Seawater.gS('100', sa, t, p - h)) / (2 * h * 1e4);
+    }
     static bpe(T, S) {
         const t = T - 273.15, s = S * 1000, A = (-4.584e-4 * t * t + 2.823e-1 * t + 17.95) * 1e-6, B = (1.536e-4 * t * t + 5.267e-2 * t + 6.56) * 1e-3;
         return A * s * s + B * s;
@@ -945,9 +1025,13 @@ class Seawater {
     static evaluate(name, a) {
         const S = Seawater, num = ThermoEngine.num;
         if (name === 'seawater') {
-            if (a.length !== 3) throw new Error("seawater(): use seawater('output', T, S), T in K and S the salinity in kg/kg");
             const o = String(a[0]).trim().toLowerCase();
-            if (!(o in S.OUT)) throw new Error(`seawater(): '${a[0]}' should be one of 'rho', 'cp', 'k', 'mu', 'nu', 'alpha', 'Pr', 'BPE'`);
+            if (o in S.TEOS) {
+                if (a.length !== 3 && a.length !== 4) throw new Error(`seawater(): use seawater('${a[0]}', T, S) or seawater('${a[0]}', T, S, P), T in K, S in kg/kg and P the absolute pressure in Pa (101325 Pa if left out)`);
+                return S.teos(o, num(a[1], 'seawater() T'), num(a[2], 'seawater() S'), a.length === 4 ? num(a[3], 'seawater() P') : 101325);
+            }
+            if (a.length !== 3) throw new Error(`seawater(): use seawater('${a[0]}', T, S), T in K and S the salinity in kg/kg${a.length === 4 ? "; a pressure is taken only by 'h', 's', 'g', 'muw', 'aw', 'phi' and 'Pi'" : ''}`);
+            if (!(o in S.OUT)) throw new Error(`seawater(): '${a[0]}' should be one of 'rho', 'cp', 'k', 'mu', 'nu', 'alpha', 'Pr', 'BPE', 'h', 's', 'g', 'muw', 'aw', 'phi', 'Pi'`);
             return S.props(num(a[1], 'seawater() T'), num(a[2], 'seawater() S'))[o];
         }
         if (a.length !== 2) throw new Error(`${name}(): use ${name === 'oceandepth' ? 'oceandepth(P, lat), P the absolute pressure in Pa' : 'oceanpressure(z, lat), z the depth in m'} and lat the latitude in radians (tag it [deg])`);
@@ -1876,7 +1960,7 @@ class ThermoEngine {
         // --- solutions of a nonvolatile solute, ideal: see the Solutions class ---
         solution: { key: '', unit: '', kind: 'sol', desc: "Ideal solution of a nonvolatile solute: solution('output', 'NaCl&water', 'key1', v1, 'key2', v2); keys T, P, w (solute mass fraction) or m (molality); outputs P (vapor pressure), T (boiling point), dT, Tf (freezing point, water), dTf, Pi (osmotic pressure), aw, m, w" },
         // --- seawater at 1 atm (Sharqawy et al. 2010) and the ocean's pressure and depth (UNESCO 1983): see the Seawater class ---
-        seawater: { key: '', unit: '', kind: 'sea', desc: "Seawater at atmospheric pressure (Sharqawy et al. 2010): seawater('output', T, S), T 273.15 to 393.15 K, S the salinity in kg/kg (0 to 0.12); outputs rho, cp, k, mu, nu, alpha, Pr, BPE (boiling-point elevation)" },
+        seawater: { key: '', unit: '', kind: 'sea', desc: "Seawater at atmospheric pressure (Sharqawy et al. 2010): seawater('output', T, S), T 273.15 to 393.15 K, S the salinity in kg/kg (0 to 0.12); outputs rho, cp, k, mu, nu, alpha, Pr, BPE (boiling-point elevation); and from TEOS-10, seawater('output', T, S[, P]) with T up to 353.15 K: h, s, g, muw (chemical potential of water), aw (water activity), phi (osmotic coefficient), Pi (osmotic pressure)" },
         oceandepth: { key: '', unit: 'm', kind: 'sea', desc: 'Depth of the standard ocean (UNESCO 1983) at absolute pressure P (Pa) and latitude lat (rad): oceandepth(P, lat)' },
         oceanpressure: { key: '', unit: 'Pa', kind: 'sea', desc: 'Absolute pressure of the standard ocean (UNESCO 1983) at depth z (m) and latitude lat (rad): oceanpressure(z, lat)' },
         // --- general access to everything else CoolProp offers ---

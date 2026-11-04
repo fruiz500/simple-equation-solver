@@ -113,7 +113,7 @@ class UnitConsistencyChecker {
     static MIX_DIM = { t: 'K', p: 'Pa', x: '', q: '', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', xl: '', yv: '', m: 'kg/mol', he: 'J/mol', se: 'J/(mol K)', ge: 'J/mol', ve: 'm^3/mol' };   // mixture() keys and outputs
     static EQ_DIM = { t: 'K', p: 'Pa', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', m: 'kg/mol', n: '', tr: 'K' };   // equilibrium() keys and outputs
     static RX_DIM = { dh: 'J', ds: 'J/K', dg: 'J', lnk: '', k: '', e0: 'V', t: 'K', n: '' };   // reaction(): per reaction as written (mol)
-    static SEA_DIM = { rho: 'kg/m^3', cp: 'J/(kg K)', k: 'W/(m K)', mu: 'Pa s', nu: 'm^2/s', alpha: 'm^2/s', pr: '', bpe: 'K' };
+    static SEA_DIM = { rho: 'kg/m^3', cp: 'J/(kg K)', k: 'W/(m K)', mu: 'Pa s', nu: 'm^2/s', alpha: 'm^2/s', pr: '', bpe: 'K', h: 'J/kg', s: 'J/(kg K)', g: 'J/kg', muw: 'J/kg', aw: '', phi: '', pi: 'Pa' };
     static SOL_DIM = { t: 'K', p: 'Pa', w: '', m: 'mol/kg', nu: '', dt: 'K', tf: 'K', dtf: 'K', pi: 'Pa', aw: '' };   // solution() keys and outputs (M: kg/mol)   // seawater() outputs
     static ATM_DIM = { t: 'K', p: 'Pa', rho: 'kg/m^3', c: 'm/s', mu: 'Pa s', k: 'W/(m K)', nu: 'm^2/s', g: 'm/s^2', h: 'm' };   // atmosphere() outputs
     static NH3_DIM = { t: 'K', p: 'Pa', x: '', q: '', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', xl: '', yv: '' };   // nh3h2o() keys and outputs

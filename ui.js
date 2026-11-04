@@ -578,7 +578,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // It replaces the plot shown; log x and log y follow the diagram (log P on P-h, for example).
     function drawPlotLine(src, values) {
         const { sc, units } = PlotLines.scope(values, unitOf);
-        const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units });
+        const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units, unc: (curUnc() || {}).u });
         if (!plotStyle.saved) plotStyle.saved = { logX: plotStyle.logX, logY: plotStyle.logY };   // put back for the next table plot
         plotStyle.logX = out.logx; plotStyle.logY = out.logy;
         document.getElementById('plot-logx').checked = out.logx; document.getElementById('plot-logy').checked = out.logy;
@@ -1342,6 +1342,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     })();
+
+    // The EES converter (convert.html), opened from this page, sends its result back by a message (pages opened from files
+    // cannot call each other directly). Only messages from the converter window opened here are taken.
+    let converterWin = null;
+    document.getElementById('btn-ees').addEventListener('click', () => { converterWin = window.open('convert.html', '_blank'); });
+    window.addEventListener('message', (ev) => {
+        if (!converterWin || ev.source !== converterWin || !ev.data || typeof ev.data.sesImport !== 'string') return;
+        if (editor.value.trim() && !window.confirm('Replace the equations in the Equations pane with the converted ones?')) return;
+        editor.value = ev.data.sesImport;
+        editor.dispatchEvent(new Event('input'));
+        console.log('Equations converted from EES. Check the converter\'s report, then Check and Solve.');
+    });
 
     console.log("Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz. Free software under the GNU General Public License v3 or later, with no warranty; see Help, About.");
 });
