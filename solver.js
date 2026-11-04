@@ -621,6 +621,61 @@ class ParametricController {
     }
 }
 
+// Propagation of uncertainty to first order, for independent inputs (GUM, JCGM 100:2008, Eq. 10):
+//     u(y)^2 = sum over the inputs x_i of (dy/dx_i * u(x_i))^2
+// Each dy/dx_i is a central difference: the equations are solved again with x_i + h and with x_i - h, starting from the
+// solution, where h = u_i, or 1e-4 |x_i| if u_i is smaller (a smaller change could stay within the solver's tolerance, and over
+// it y is linear anyway). These solves, and one more at the given values, use a tolerance 1000 times tighter than Solve's, so
+// that the differences are not lost in the solver's own error (if one fails at that tolerance it is repeated at Solve's). With
+// h = u_i, the second difference y(+) + y(-) - 2 y measures how far y is from linear over +-u_i; where it exceeds 10 % of the
+// first, a warning says the first-order estimate is rough. Their messages are not shown; ode block tables stay those of Solve.
+class Uncertainty {
+    static TOL = 1e-10;
+    // parser: just parsed and solved; base: the solution (name -> SI value). -> { u: Map name -> u(y), parts: Map name ->
+    // [{ input, s: dy/dx, c: (s u)^2 }], inputs: [{ name, x, u, given, line }], warnings: [text], base }
+    static run(parser, base, solverClass = BoundedSolver) {
+        const inputs = [...parser.uncertain.entries()].filter(([, g]) => g.u > 0);
+        const keepTables = OdeBlocks.tables, keep = { log: console.log, warn: console.warn };
+        const solveWith = (k, x, tight) => {
+            const asts = parser.parsedASTs.slice();
+            if (k >= 0) asts[k] = { ...asts[k], rightAST: new math.ConstantNode(x) };
+            const vars = new Map([...parser.variables].map(([n, m]) => [n, { ...m, guess: (typeof base[n] === 'number' && Number.isFinite(base[n])) ? base[n] : m.guess }]));
+            const s = new solverClass(asts, vars, parser.odeCalls);
+            if (tight) s.tolerance = Uncertainty.TOL;
+            return s.solve();
+        };
+        const solveAt = (k, x, what) => {
+            try { return solveWith(k, x, true); } catch (e) { }
+            try { return solveWith(k, x, false); } catch (e) { throw new Error(`Uncertainty: the equations could not be solved ${what}: ${e.message}`); }
+        };
+        console.log = console.warn = () => { };
+        try {
+            const y0 = solveAt(-1, 0, 'at the given values');
+            const names = Object.keys(y0).filter(n => typeof y0[n] === 'number' && Number.isFinite(y0[n]));
+            const sq = new Map(names.map(n => [n, 0])), parts = new Map(names.map(n => [n, []])), warnings = [], done = [];
+            for (const [name, g] of inputs) {
+                const x0 = y0[name], h = Math.max(g.u, 1e-4 * Math.abs(x0)), si = (v) => `${+v.toPrecision(6)}`;
+                const yp = solveAt(g.eq, x0 + h, `with ${name} = ${si(x0)} + ${si(h)} (SI)`);
+                const ym = solveAt(g.eq, x0 - h, `with ${name} = ${si(x0)} - ${si(h)} (SI)`);
+                const bent = [];
+                for (const n of names) {
+                    const a = yp[n], b = ym[n];
+                    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+                    const s = (a - b) / (2 * h), c = (s * g.u) ** 2;
+                    sq.set(n, sq.get(n) + c);
+                    if (c > 0) parts.get(n).push({ input: name, s, c });
+                    const lin = Math.abs(a - b) / 2, curv = Math.abs(a + b - 2 * y0[n]) / 2, scale = Math.max(Math.abs(y0[n]), Math.abs(a), Math.abs(b));
+                    if (h === g.u && n !== name && curv > 0.1 * lin && curv > 1e-7 * scale) bent.push(n);
+                }
+                if (bent.length) warnings.push(`Uncertainty: over ${name} ± ${g.given}, ${bent.slice(0, 3).join(', ')}${bent.length > 3 ? ` and ${bent.length - 3} more` : ''} ` +
+                    `${bent.length > 1 ? 'are' : 'is'} far from linear in ${name}; ${bent.length > 1 ? 'their' : 'its'} first-order uncertainty is a rough estimate.`);
+                done.push({ name, x: x0, u: g.u, given: g.given, line: g.line });
+            }
+            return { u: new Map([...sq].map(([n, v]) => [n, Math.sqrt(v)])), parts, inputs: done, warnings, base: y0 };
+        } finally { console.log = keep.log; console.warn = keep.warn; OdeBlocks.tables = keepTables; }
+    }
+}
+
 class Optimizer1D {
     constructor(parser, solverClass) {
         this.parser = parser;

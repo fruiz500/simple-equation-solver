@@ -290,6 +290,8 @@ class OdeBlocks {
             } else if ((m = t.match(new RegExp(`^${NAME}\\s*\\((.+)\\)\\s*=\\s*(.+)$`)))) {
                 const s = named(m[1], ln);
                 if (init.has(s)) throw new Error(`Line ${ln}: the initial value of ${s} is given twice.`);
+                if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?(?:\s*\[[^\]]*\])?\s*(?:\+-|±)/.test(m[3].trim()))   // T(0) = 400 [K] +- 3: not here
+                    throw new Error(`Line ${ln}: an initial value in an ode block cannot carry an uncertainty; give it a name before the block, as  ${s.replace(/\[.*$/, '')}_0 = value +- u,  and write  ${s}(${m[2]}) = ${s.replace(/\[.*$/, '')}_0.`);
                 init.set(s, { at: parse(m[2], ln), node: parse(m[3], ln), unit: parse.lastUnit, ln });
             } else if ((m = t.match(new RegExp(`^${NAME}\\s*=\\s*(.+)$`))) && !/^=/.test(m[2])) {
                 const a = named(m[1], ln);

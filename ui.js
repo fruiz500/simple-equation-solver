@@ -333,10 +333,54 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Uncertainty box (off at every visit): after each Solve, the uncertainties given with ± are propagated (Uncertainty in
+    // solver.js). The result is kept with the text that produced it, like lastResults.
+    const uncBox = document.getElementById('uncertainty');
+    let lastUnc = null;
+    const curUnc = () => (lastUnc && sameText(lastUnc.text, editor.value)) ? lastUnc : null;
+    const fmtUnc = (v) => v === 0 ? '0' : v >= 10 ? String(+v.toPrecision(2)) : v >= 1e-3 ? v.toPrecision(2) : v.toExponential(1);   // two significant digits
+    const dispDelta = (unit, si) => Math.abs(UnitConv.fromSI(si, unit) - UnitConv.fromSI(0, unit));   // a difference, in a display unit
+    function runUncertainty(base) {
+        lastUnc = null;
+        try {
+            lastUnc = { text: editor.value, ...Uncertainty.run(parser, base) };
+            console.log('Uncertainties (first order, independent inputs):');
+            displayOrder([...lastUnc.u.keys()]).forEach(n => {
+                const u = lastUnc.u.get(n);
+                if (u > 0) console.log(`  ${n} = ${fmtNum(toDisp(n, base[n]))} ± ${fmtUnc(dispDelta(unitOf(n), u))}${unitTag(n)}`);
+            });
+            lastUnc.warnings.forEach(w => console.warn(w));
+        } catch (e) { lastUnc = null; console.error(e.message); }
+    }
+    uncBox.addEventListener('change', () => {
+        lastUnc = null;
+        const cur = currentResults();
+        if (uncBox.checked && cur) {   // ticked after a solve: propagate now
+            try { parser.parse(editor.value); } catch (e) { console.error(e.message); return; }
+            if (parser.uncertain.size) runUncertainty(Object.fromEntries(cur));
+        }
+        updateVariablesUI(parser.variables);
+    });
+    // Which inputs make up the uncertainty of a variable: their sensitivities and shares of u^2
+    function openUncertainty(name) {
+        const uc = curUnc();
+        if (!uc || !uc.parts.get(name)) return;
+        const parts = uc.parts.get(name).slice().sort((a, b) => b.c - a.c), tot = parts.reduce((s, p) => s + p.c, 0);
+        const uy = unitOf(name), per = (ux) => (uy || ux) ? ` [${uy || '-'}/${ux || '-'}]` : '';
+        document.getElementById('inspector-title').innerText = `Uncertainty of ${name}: ± ${fmtUnc(dispDelta(uy, uc.u.get(name)))}${unitTag(name)}`;
+        document.getElementById('inspector-body').innerHTML = '<table class="matrix-table"><tr><th>Input</th><th>Given ±</th><th>Sensitivity</th><th>Share of u²</th></tr>' +
+            parts.map(p => {
+                const ux = unitOf(p.input), s = p.s * dispDelta(uy, 1) / dispDelta(ux, 1);
+                return `<tr><td>${p.input}</td><td>${fmtUnc(dispDelta(ux, uc.inputs.find(i => i.name === p.input).u))}${unitTag(p.input)}</td><td>${s !== 0 && Math.abs(s) < 1e-3 ? s.toExponential(3) : String(+s.toPrecision(4))}${per(ux)}</td><td>${(100 * p.c / tot).toFixed(1)} %</td></tr>`;
+            }).join('') + '</table>';
+        modal.style.display = 'flex';
+    }
+
     // Render Variables UI Pane
     function updateVariablesUI(variablesMap) {
         variablesContainer.innerHTML = '';
         const table = document.createElement('table');
+        const uc = curUnc(), showUnc = parser.uncertain.size > 0 || !!uc;
 
         table.innerHTML = `<thead><tr style="background:#eee; text-align:left;">
             <th style="padding:4px;" title="Variable name">Var</th>
@@ -344,7 +388,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <th style="padding:4px;" title="Lower bound (blank: none)">Min</th>
             <th style="padding:4px;" title="Upper bound (blank: none)">Max</th>
             <th style="padding:4px;" title="Unit for display and input (blank: SI; the gray text is the unit Check found)">Unit</th>
-            <th style="padding:4px;" title="Result of the last Solve or Min/Max (click a magnifier to see an array)">Value</th></tr></thead><tbody></tbody>`;
+            <th style="padding:4px;" title="Result of the last Solve or Min/Max (click a magnifier to see an array)">Value</th>${showUnc ? `
+            <th style="padding:4px;" title="Uncertainty: gray, given with ± in the equations; black, propagated after Solve with Uncertainty ticked (click it to see where it comes from)">±</th>` : ''}</tr></thead><tbody></tbody>`;
 
         const tbody = table.querySelector('tbody');
         displayOrder([...variablesMap.keys()]).forEach((name) => {
@@ -372,9 +417,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" title="Upper bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${meta.inferredUnit || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input" style="width:100px; text-align:center;"></td>
                 <td class="val" style="padding:2px 4px;">${solvedDisplay}</td>`;
+            if (showUnc) {
+                const g = parser.uncertain.get(name), u = uc && uc.u.get(name), td = document.createElement('td');
+                td.className = 'unc'; td.style.padding = '2px 4px';
+                if (g) { td.classList.add('unc-given'); td.textContent = fmtUnc(dispDelta(unit, g.u)); td.title = `Given in the equations (line ${g.line}): ± ${g.given}`; }
+                else if (u > 0) td.innerHTML = `<span class="clickable-badge" data-unc="${name}" title="Click to see which inputs contribute">${fmtUnc(dispDelta(unit, u))}</span>`;
+                else if (u === 0) td.textContent = '0';
+                tr.appendChild(td);
+            }
             tbody.appendChild(tr);
         });
         variablesContainer.appendChild(table);
+        table.querySelectorAll('[data-unc]').forEach(el => el.addEventListener('click', () => openUncertainty(el.dataset.unc)));
 
         // Edits are entered in the variable's display unit and stored in SI
         table.querySelectorAll('input[data-var]').forEach(input => {
@@ -551,6 +605,11 @@ document.addEventListener('DOMContentLoaded', () => {
             snapshotResults();
             warnOutOfBounds();
             adopt();
+            lastUnc = null;
+            if (parser.uncertain.size) {
+                if (uncBox.checked) runUncertainty(solution);
+                else console.log(`${parser.uncertain.size} given value(s) carry an uncertainty (±); tick Uncertainty in the Variables pane to propagate them.`);
+            }
             updateVariablesUI(parser.variables);
 
             // Auto-plot ODE output if present

@@ -40,6 +40,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - Water in every phase, under the name `'water'` or `'ice'`: ice Ih from the IAPWS equation of state for ice, the sublimation and melting curves, and vapor below the triple point, all on the same reference as CoolProp's water, so latent heats of fusion and sublimation come out of the enthalpies.
 - Solids: conductivity, specific heat, density and diffusivity of the metals and nonmetals in Incropera's Tables A.1 to A.3, interpolated in temperature.
 - The U.S. Standard Atmosphere 1976, from -5 to 86 km: temperature, pressure, density, speed of sound, viscosity, conductivity and gravity, and the pressure or density altitude.
+- Seawater at atmospheric pressure, 0 to 120 °C and 0 to 120 g/kg: density, specific heat, conductivity, viscosity, diffusivity and Prandtl number. Also the pressure at a depth in the ocean, and the depth at a pressure.
 - Generalized compressibility (Lee–Kesler): Z, the enthalpy and entropy departures and the fugacity coefficient from Tr, Pr and the acentric factor, as in the generalized charts and tables. The fugacity of every CoolProp fluid is available too.
 
 **Compressible flow**
@@ -58,6 +59,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - **Plots:** overlaid curves, linear or log axes, straight or smooth lines, light and dark color schemes, adjustable text size, and export as PNG or SVG for publication.
 - **Min/Max optimization** of one or more free variables within bounds. It uses BFGS (the default) or Nelder–Mead, with an optional multistart, and Brent's or golden-section search for one variable.
 - **ODE blocks:** initial-value problems solved alongside the algebraic equations. They use adaptive Dormand–Prince 5(4) or, for stiff systems, a linearly implicit extrapolation method. The solver can also solve for an end time that meets a condition.
+- **Uncertainty:** give measured values with their uncertainty, as `T_1 = 400 [degC] +- 1 [K]` or `P_1 = 3000 [kPa] +- 1 %`, and every result gets its uncertainty, by first-order propagation for independent inputs, with each input's share.
 - **Tabulated data:** `interpolate()` in 1-D and 2-D, linear, cubic spline or monotone (pchip), forward or backward, with optional extrapolation and a warning.
 - A console command line for quick calculations, including symbolic `derivative()` and `simplify()`.
 - **Save** and **Open** sessions as plain-text `.ses` files (equations plus variable settings), and export results and tables as tab-separated text that opens in Excel.
@@ -130,6 +132,7 @@ Run `node run.mjs --verbose` for details, or `node run.mjs correlations` to run 
 - The Moody chart friction factor uses C. F. Colebrook, "Turbulent flow in pipes, with particular reference to the transition region between the smooth and rough pipe laws," *Journal of the Institution of Civil Engineers* 11(4), 133–156, 1939.
 - The regenerator model follows R. K. Shah and D. P. Sekulić, *Fundamentals of Heat Exchanger Design*, Wiley, 2003, Ch. 5; the Kays and London correlation given for comparison is from W. M. Kays and A. L. London, *Compact Heat Exchangers*, 3rd ed., McGraw-Hill, 1984.
 - Bessel function values were checked against M. Abramowitz and I. A. Stegun, *Handbook of Mathematical Functions*, NBS, 1964. Radiation functions use the CODATA 2018 values of h, c and k.
+- Seawater: M. H. Sharqawy, J. H. Lienhard V and S. M. Zubair, "Thermophysical properties of seawater: a review of existing correlations and data," *Desalination and Water Treatment* 16, 354–380, 2010 ([doi:10.5004/dwt.2010.1079](https://doi.org/10.5004/dwt.2010.1079)), through CoolProp's fit of them, checked against K. G. Nayar, M. H. Sharqawy and J. H. Lienhard V, *MIT Seawater Property Tables* ([web.mit.edu/seawater](https://web.mit.edu/seawater)). Pressure and depth: N. P. Fofonoff and R. C. Millard, *Algorithms for computation of fundamental properties of seawater*, UNESCO Technical Papers in Marine Science 44, 1983.
 - Standard atmosphere: *U.S. Standard Atmosphere, 1976*, NOAA, NASA and USAF, U.S. Government Printing Office, 1976 (NASA TM-X-74335).
 - Generalized compressibility: B. I. Lee and M. G. Kesler, "A generalized thermodynamic correlation based on three-parameter corresponding states," *AIChE Journal* 21(3), 510–527, 1975 ([doi:10.1002/aic.690210313](https://doi.org/10.1002/aic.690210313)).
 - Compressible flow: the perfect-gas relations of J. D. Anderson, *Modern Compressible Flow*, 3rd ed., McGraw-Hill, 2003, and Ames Research Staff, *Equations, Tables, and Charts for Compressible Flow*, NACA Report 1135, 1953. Particle-laden flow: F. Ruiz, "Adiabatic interaction of particles with a compressible flow: basic mechanics," *Journal of Propulsion and Power* 16(3), 415–420, 2000 ([doi:10.2514/2.5605](https://doi.org/10.2514/2.5605)), with the mixture sound speed of G. B. Wallis, *One-Dimensional Two-Phase Flow*, McGraw-Hill, 1969.
@@ -138,6 +141,7 @@ Run `node run.mjs --verbose` for details, or `node run.mjs correlations` to run 
 **Numerical methods:**
 - ODEs: J. R. Dormand and P. J. Prince, "A family of embedded Runge–Kutta formulae," *J. Comput. Appl. Math.* 6(1), 19–26, 1980. Stiff systems use linearly implicit Euler with extrapolation, after E. Hairer and G. Wanner, *Solving Ordinary Differential Equations II*, Springer, 1996.
 - Optimization: BFGS and Nelder–Mead, as described in J. Nocedal and S. J. Wright, *Numerical Optimization*, 2nd ed., Springer, 2006, and in J. A. Nelder and R. Mead, *The Computer Journal* 7(4), 308–313, 1965.
+- Uncertainty: first-order propagation for independent inputs, as in JCGM 100:2008, *Evaluation of measurement data — Guide to the expression of uncertainty in measurement* (GUM), Eq. 10 ([bipm.org](https://www.bipm.org/en/committees/jc/jcgm/publications)).
 - Interpolation: monotone piecewise cubic (pchip), after F. N. Fritsch and R. E. Carlson, *SIAM J. Numer. Anal.* 17(2), 238–246, 1980.
 
 ## License

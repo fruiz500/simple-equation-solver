@@ -216,6 +216,8 @@ button.small {
 .fe-eq { cursor: copy; border-radius: 3px; }
 .fe-eq:hover { background: #f0f6ff; }
 .fe-eq math { font-size: 17px; margin: 6px 0; }
+.fe-in { margin-left: 2em; }
+.unc-given { color: #777; }
 .fe-text { font-family: monospace; font-size: 13px; color: #555; margin: 2px 0; white-space: pre; }
 .fe-empty { color: #888; }
 

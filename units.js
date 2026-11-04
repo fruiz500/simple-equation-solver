@@ -110,6 +110,7 @@ class UnitConsistencyChecker {
         s: 'J/(kg K)', entropy: 'J/(kg K)', d: 'kg/m^3', density: 'kg/m^3',
         u: 'J/kg', internalenergy: 'J/kg', q: '', quality: '', x: '', v: 'm^3/kg', specificvolume: 'm^3/kg'
     };
+    static SEA_DIM = { rho: 'kg/m^3', cp: 'J/(kg K)', k: 'W/(m K)', mu: 'Pa s', nu: 'm^2/s', alpha: 'm^2/s', pr: '' };   // seawater() outputs
     static ATM_DIM = { t: 'K', p: 'Pa', rho: 'kg/m^3', c: 'm/s', mu: 'Pa s', k: 'W/(m K)', nu: 'm^2/s', g: 'm/s^2', h: 'm' };   // atmosphere() outputs
     static NH3_DIM = { t: 'K', p: 'Pa', x: '', q: '', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', xl: '', yv: '' };   // nh3h2o() keys and outputs
     static HA_DIM = { T: 'K', Tdb: 'K', B: 'K', Twb: 'K', D: 'K', Tdp: 'K', P: 'Pa', R: '', RH: '', W: '', Omega: '' };
@@ -223,6 +224,8 @@ class UnitConsistencyChecker {
             keyed(1, 2, U.NH3_DIM); keyed(3, 4, U.NH3_DIM); keyed(5, 6, U.NH3_DIM);
         } else if (spec.kind === 'atm') {
             if (name === 'atmosphere') expected.push([1, 'm']); else keyed(0, 1, U.ATM_DIM);
+        } else if (spec.kind === 'sea') {
+            if (name === 'seawater') expected.push([1, 'K'], [2, '']); else expected.push([0, name === 'oceandepth' ? 'Pa' : 'm'], [1, '']);
         }
         if (spec.kind === 'ig') (spec.argUnits || []).forEach((u, i) => { if (i < rest) expected.push([i + 1, u]); });
         expected.forEach(([i, u]) => {
@@ -334,6 +337,10 @@ class UnitConsistencyChecker {
                 }
                 if (tspec.kind === 'nh3') {   // the unit of the output named first
                     const k0 = node.args[0], u = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? U.NH3_DIM[k0.value.trim().toLowerCase()] : undefined;
+                    return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
+                }
+                if (tspec.kind === 'sea' && name === 'seawater') {   // the unit of the output named first
+                    const k0 = node.args[0], u = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? U.SEA_DIM[k0.value.trim().toLowerCase()] : undefined;
                     return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
                 }
                 if (tspec.kind === 'atm' && name === 'atmosphere') {   // the unit of the output named first

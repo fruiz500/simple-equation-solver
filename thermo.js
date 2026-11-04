@@ -907,6 +907,59 @@ class StdAtmosphere {
     }
 }
 
+// Seawater at atmospheric pressure, and pressure and depth in the ocean.
+// seawater('output', T, S): T 273.15 to 393.15 K, S the absolute salinity in kg/kg (0 to 0.12), from the correlations of
+// M. H. Sharqawy, J. H. Lienhard V and S. M. Zubair, Desalination and Water Treatment 16 (2010) 354-380. Density, cp and k
+// through CoolProp's fit of them (INCOMP::MITSW, within 0.06 % of the MIT seawater property tables); the viscosity straight
+// from the paper's correlation (CoolProp's fit of it is up to 0.8 % off), mu_w(t) (1 + A S + B S^2), t in degC. These are
+// correlations at atmospheric pressure (at the vapor pressure above 100 degC) and do not depend on pressure; CoolProp is called
+// at 1 MPa, above the vapor pressure up to 120 degC, since it refuses a pressure below it.
+// oceandepth(P, lat) and oceanpressure(z, lat): N. P. Fofonoff and R. C. Millard, Algorithms for computation of fundamental
+// properties of seawater, UNESCO Technical Papers in Marine Science 44, 1983 (after Saunders and Fofonoff 1976): the depth of
+// the standard ocean (0 degC, S = 35) from the sea pressure p = P - 101325 Pa, in dbar; check value 9712.653 m at 10000 dbar,
+// 30 deg. lat in radians. oceanpressure inverts it by bisection.
+class Seawater {
+    static OUT = { rho: 1, cp: 1, k: 1, mu: 1, nu: 1, alpha: 1, pr: 1 };
+    static mu(T, S) {
+        const t = T - 273.15, A = 1.541 + 1.998e-2 * t - 9.52e-5 * t * t, B = 7.974 - 7.561e-2 * t + 4.724e-4 * t * t;
+        return (4.2844e-5 + 1 / (0.157 * (t + 64.993) ** 2 - 91.296)) * (1 + A * S + B * S * S);
+    }
+    static props(T, S) {
+        if (!(T >= 273.15 - 1e-9 && T <= 393.15 + 1e-9)) throw new Error(`seawater(): T = ${T} K is outside the correlations, 273.15 to 393.15 K (0 to 120 degC)`);
+        if (!(S >= 0 && S <= 0.12)) throw new Error(`seawater(): S = ${S} is outside the correlations, 0 to 0.12 kg/kg (0 to 120 g/kg); give the salinity in kg/kg, e.g. 0.035`);
+        const CP = ThermoEngine.CP, f = `INCOMP::MITSW[${S}]`, T1 = Math.min(Math.max(T, 273.15), 393.15);
+        const get = (k) => { const v = CP.PropsSI(k, 'T', T1, 'P', 1e6, f); if (!Number.isFinite(v)) ThermoEngine.fail(CP, `seawater ${k} at T = ${T} K, S = ${S}`); return v; };
+        const rho = get('D'), cp = get('C'), k = get('L'), mu = Seawater.mu(T1, S);
+        return { rho, cp, k, mu, nu: mu / rho, alpha: k / (rho * cp), pr: mu * cp / k };
+    }
+    static depth(P, lat) {   // P absolute, Pa
+        const p = (P - 101325) / 1e4, x = Math.sin(lat) ** 2;
+        const g = 9.780318 * (1 + (5.2788e-3 + 2.36e-5 * x) * x) + 1.092e-6 * p;
+        return (((-1.82e-15 * p + 2.279e-10) * p - 2.2512e-5) * p + 9.72659) * p / g;
+    }
+    static evaluate(name, a) {
+        const S = Seawater, num = ThermoEngine.num;
+        if (name === 'seawater') {
+            if (a.length !== 3) throw new Error("seawater(): use seawater('output', T, S), T in K and S the salinity in kg/kg");
+            const o = String(a[0]).trim().toLowerCase();
+            if (!(o in S.OUT)) throw new Error(`seawater(): '${a[0]}' should be one of 'rho', 'cp', 'k', 'mu', 'nu', 'alpha', 'Pr'`);
+            return S.props(num(a[1], 'seawater() T'), num(a[2], 'seawater() S'))[o];
+        }
+        if (a.length !== 2) throw new Error(`${name}(): use ${name === 'oceandepth' ? 'oceandepth(P, lat), P the absolute pressure in Pa' : 'oceanpressure(z, lat), z the depth in m'} and lat the latitude in radians (tag it [deg])`);
+        const v = num(a[0], `${name}() ${name === 'oceandepth' ? 'P' : 'z'}`), lat = num(a[1], `${name}() latitude`);
+        if (!(Math.abs(lat) <= Math.PI / 2 + 1e-12)) throw new Error(`${name}(): latitude ${lat} rad is not between -pi/2 and pi/2; give it in degrees with a unit tag, lat = 30 [deg]`);
+        const Pmax = 101325 + 1e8, zmax = S.depth(Pmax, lat);
+        if (name === 'oceandepth') {
+            if (!(v >= 101325 - 1e-6 && v <= Pmax)) throw new Error(`oceandepth(): P = ${v} Pa is outside 101325 Pa (the surface) to ${Pmax} Pa (10000 dbar of sea pressure); P is the absolute pressure`);
+            return S.depth(v, lat);
+        }
+        if (!(v >= -1e-9 && v <= zmax)) throw new Error(`oceanpressure(): z = ${v} m is outside 0 to ${+zmax.toPrecision(6)} m (10000 dbar of sea pressure at this latitude); z is the depth, positive down`);
+        let lo = 101325, hi = Pmax;
+        for (let it = 0; it < 200 && hi - lo > 1e-7; it++) { const m = (lo + hi) / 2; if (S.depth(m, lat) < v) lo = m; else hi = m; }
+        return (lo + hi) / 2;
+    }
+}
+
 // ==========================================
 // 2. THERMODYNAMIC PROPERTY ENGINE (COOLPROP)
 // ==========================================
@@ -991,6 +1044,10 @@ class ThermoEngine {
         // --- U.S. Standard Atmosphere 1976, -5 to 86 km ---
         atmosphere: { key: '', unit: '', kind: 'atm', desc: "U.S. Standard Atmosphere 1976 at geometric altitude z in m (-5 to 86 km): atmosphere('output', z); outputs T, P, rho, c, mu, k, nu, g, H (geopotential altitude)" },
         atmosphere_altitude: { key: '', unit: 'm', kind: 'atm', desc: "Geometric altitude of the standard atmosphere where the pressure or the density has a value: atmosphere_altitude('P', P) or ('rho', rho)" },
+        // --- seawater at 1 atm (Sharqawy et al. 2010) and the ocean's pressure and depth (UNESCO 1983): see the Seawater class ---
+        seawater: { key: '', unit: '', kind: 'sea', desc: "Seawater at atmospheric pressure (Sharqawy et al. 2010): seawater('output', T, S), T 273.15 to 393.15 K, S the salinity in kg/kg (0 to 0.12); outputs rho, cp, k, mu, nu, alpha, Pr" },
+        oceandepth: { key: '', unit: 'm', kind: 'sea', desc: 'Depth of the standard ocean (UNESCO 1983) at absolute pressure P (Pa) and latitude lat (rad): oceandepth(P, lat)' },
+        oceanpressure: { key: '', unit: 'Pa', kind: 'sea', desc: 'Absolute pressure of the standard ocean (UNESCO 1983) at depth z (m) and latitude lat (rad): oceanpressure(z, lat)' },
         // --- general access to everything else CoolProp offers ---
         props: { key: '', unit: '', kind: 'props', desc: "props('output', fluid, 'key1', v1, 'key2', v2): any CoolProp output parameter" },
         props1: { key: '', unit: '', kind: 'props1', desc: "props1('output', fluid): any CoolProp fluid constant" },
@@ -1051,6 +1108,7 @@ class ThermoEngine {
         if (spec.kind === 'libr') return LiBrH2O.evaluate(name, a);
         if (spec.kind === 'nh3') return NH3H2O.evaluate(a);
         if (spec.kind === 'atm') return StdAtmosphere.evaluate(name, a);
+        if (spec.kind === 'sea') return Seawater.evaluate(name, a);
         if (spec.kind === 'exergy') {   // physical exergy relative to the same fluid at T0, P0, through the property functions above
             if (a.length !== 5 && a.length !== 7) throw new Error(`${name}(): use ${name}(fluid, T, P, T0, P0) or ${name}(fluid, 'key1', v1, 'key2', v2, T0, P0)`);
             const T0 = ThermoEngine.num(a[a.length - 2], `${name}() T0`), P0 = ThermoEngine.num(a[a.length - 1], `${name}() P0`);

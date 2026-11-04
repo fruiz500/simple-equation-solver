@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
 // Formatted equations: the equations shown as MathML, for reading, and copied as LaTeX, for Word and other editors. Display only: the solver
 // never sees this. Names: T_1 -> T with subscript 1, T_1_2 -> subscripts 1,2, m_dot -> m with a dot over it, _bar, _hat,
-// _star, Greek names (eta, Delta_T, DELTAP). Lines inside function, ode and duplicate blocks are shown as plain text.
+// _star, Greek names (eta, Delta_T, DELTAP). integral(f, x, a, b) is shown with the integral sign. Inside an ode block,
+// y' = f is shown as dy/dt = f, y(0) = v and the helpers as equations; the header, the end and any nested block stay as text,
+// as do function and duplicate blocks.
 
 const EqFormat = (() => {
     const NS = 'http://www.w3.org/1998/Math/MathML';
@@ -38,6 +40,11 @@ const EqFormat = (() => {
 
     const PREC = { '+': 1, '-': 1, '*': 2, '/': 2, '%': 2, '^': 4 };
     const strip = (n) => { while (n && n.isParenthesisNode) n = n.content; return n; };   // the layout itself groups fractions, exponents and roots
+    const INF = (n) => {   // 1 for Infinity, -1 for -Infinity, else 0 (limits of an integral)
+        n = strip(n);
+        const isInf = (x) => x && ((x.isSymbolNode && x.name === 'Infinity') || (x.isConstantNode && x.value === Infinity));
+        return isInf(n) ? 1 : n.isOperatorNode && n.fn === 'unaryMinus' && isInf(strip(n.args[0])) ? -1 : 0;
+    };
     const num = (v) => {
         const x = Number(v), s = x !== 0 && (Math.abs(x) < 1e-4 || Math.abs(x) >= 1e7) ? x.toExponential() : String(v), m = s.match(/^(-?[\d.]+)e([+-]?\d+)$/i);
         return m ? `<mrow><mn>${m[1]}</mn><mo>·</mo><msup><mn>10</mn><mn>${+m[2]}</mn></msup></mrow>` : `<mn>${s}</mn>`;
@@ -56,6 +63,11 @@ const EqFormat = (() => {
             const a = n.args, f = n.fn.name;
             if (f === 'sqrt' && a.length === 1) return `<msqrt>${ml(strip(a[0]))}</msqrt>`;
             if (f === 'abs' && a.length === 1) return `<mrow><mo>|</mo>${ml(strip(a[0]))}<mo>|</mo></mrow>`;
+            if (f === 'integral' && a.length === 4 && strip(a[1]).isSymbolNode) {
+                const g = strip(a[0]), body = g.isOperatorNode && g.args.length === 2 && PREC[g.op] === 1 ? paren(ml(g)) : ml(g);
+                const lim = (x) => INF(x) ? (INF(x) < 0 ? '<mrow><mo>−</mo><mi mathvariant="normal">∞</mi></mrow>' : '<mi mathvariant="normal">∞</mi>') : ml(strip(x));
+                return `<mrow><msubsup><mo>∫</mo>${lim(a[2])}${lim(a[3])}</msubsup>${body}<mspace width="0.17em"/><mi mathvariant="normal">d</mi>${ml(strip(a[1]))}</mrow>`;
+            }
             return fn(f, a);
         }
         if (n.isOperatorNode) {
@@ -122,6 +134,11 @@ const EqFormat = (() => {
             const a = n.args, f = n.fn.name;
             if (f === 'sqrt' && a.length === 1) return `\\sqrt{${tex(strip(a[0]))}}`;
             if (f === 'abs' && a.length === 1) return `\\left|${tex(strip(a[0]))}\\right|`;
+            if (f === 'integral' && a.length === 4 && strip(a[1]).isSymbolNode) {
+                const g = strip(a[0]), body = g.isOperatorNode && g.args.length === 2 && PREC[g.op] === 1 ? tparen(tex(g)) : tex(g);
+                const lim = (x) => INF(x) ? (INF(x) < 0 ? '-\\infty' : '\\infty') : tex(strip(x));
+                return `\\int_{${lim(a[2])}}^{${lim(a[3])}} ${body} \\,\\mathrm{d}${tex(strip(a[1]))}`;
+            }
             return tfn(f, a);
         }
         if (n.isOperatorNode) {
@@ -148,48 +165,81 @@ const EqFormat = (() => {
         throw new Error('not formatted');
     }
 
-    // One equation (text, without comments) -> { math: a <math> element, tex: LaTeX }, or null if it cannot be formatted
-    function equation(line) {
+    // One equation (text, without comments) -> { math: a <math> element, tex: LaTeX }, or null if it cannot be formatted.
+    // indep: the independent variable of the ode block the line is in (the same line forms as OdeBlocks.compile)
+    const ODE_NAME = '([A-Za-z_]\\w*(?:\\[[^\\]]*\\])?)';
+    const ODE_D = new RegExp(`^${ODE_NAME}\\s*'\\s*=\\s*(.+)$`), ODE_I = new RegExp(`^${ODE_NAME}\\s*\\((.+)\\)\\s*=\\s*(.+)$`);
+    function equation(line, indep) {
         let text = line.trim(), unit = '';
+        const unc = indep ? null : EESParser.splitUncertainty(text);   // T = 300 [K] +- 2  ->  T = 300 ± 2 [K]
+        if (unc) text = unc.head;
         const u = text.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z$€£¥]|1\/)[a-zA-Z0-9_$€£¥\/\^\*\s\.\-\(\)]*|-)\]\s*$/);
         if (u) { unit = u[1].trim(); text = text.slice(0, u.index + 1).trim(); }
-        const eq = EESParser.equalsAt(text);
-        if (eq.length !== 1) return null;
         try {
-            const L = math.parse(text.slice(0, eq[0])), R = math.parse(text.slice(eq[0] + 1));
-            return { math: `<math xmlns="${NS}" displaystyle="true"><mrow>${ml(L)}<mo>=</mo>${ml(R)}${unit ? `<mspace width="1em"/><mtext>[${esc(unit)}]</mtext>` : ''}</mrow></math>`,
-                tex: `${tex(L)} = ${tex(R)}${unit ? `\\quad \\left[\\mathrm{${unit.replace(/\s+/g, '\\ ')}}\\right]` : ''}` };
+            let Lm, Lt, R, m;
+            if (indep && (m = text.match(ODE_D))) {                // y' = f  ->  dy/dt = f
+                const y = math.parse(m[1]);
+                Lm = `<mfrac><mrow><mi mathvariant="normal">d</mi>${ml(y)}</mrow><mrow><mi mathvariant="normal">d</mi>${ident(indep)}</mrow></mfrac>`;
+                Lt = `\\frac{\\mathrm{d}${tex(y)}}{\\mathrm{d}${identTex(indep)}}`;
+                R = math.parse(m[2]);
+            } else if (indep && (m = text.match(ODE_I))) {         // y(0) = value, with y in italics as a variable
+                const y = math.parse(m[1]), at = math.parse(m[2]);
+                Lm = `<mrow>${ml(y)}${paren(ml(strip(at)))}</mrow>`;
+                Lt = `${tex(y)}${tparen(tex(strip(at)))}`;
+                R = math.parse(m[3]);
+            } else {
+                const eq = EESParser.equalsAt(text);
+                if (eq.length !== 1) return null;
+                const L = math.parse(text.slice(0, eq[0]));
+                Lm = ml(L); Lt = tex(L); R = math.parse(text.slice(eq[0] + 1));
+            }
+            const mu = (w) => `<mspace width="1em"/><mtext>[${esc(w)}]</mtext>`, tu = (w) => `\\quad \\left[\\mathrm{${w.replace(/\s+/g, '\\ ')}}\\right]`;
+            let Rm = ml(R), Rt = tex(R);
+            if (unc) {   // a unit of its own, other than the value's, goes after it; a percentage stays a percentage
+                const pct = unc.tail === '%', own = unc.tail && !pct && unc.tail !== unit;
+                if ((own || pct) && unit) { Rm += mu(unit); Rt += tu(unit); unit = ''; }
+                Rm += `<mo>±</mo>${num(unc.u)}${pct ? '<mo>%</mo>' : ''}`;
+                Rt += ` \\pm ${tnum(unc.u)}${pct ? '\\,\\%' : ''}`;
+                if (own) unit = unc.tail;
+            }
+            return { math: `<math xmlns="${NS}" displaystyle="true"><mrow>${Lm}<mo>=</mo>${Rm}${unit ? mu(unit) : ''}</mrow></math>`,
+                tex: `${Lt} = ${Rt}${unit ? tu(unit) : ''}` };
         } catch (e) { return null; }
     }
 
-    // The whole text -> items { math } or { text } in order. Comments are dropped; block lines stay as text.
+    // The whole text -> items { math } or { text } in order. Comments are dropped; block lines stay as text, except the
+    // lines directly inside an ode block, which are formatted and marked inner (indented)
     function render(src) {
         const lines = src.replace(/\/\*[\s\S]*?\*\/|\/\/.*|\{[^}]*\}/g, (c) => c.replace(/[^\n]/g, ' ')).split('\n');
         EESParser.joinContinuations(lines);
         EESParser.splitSemicolons(lines);
-        const raw = src.split('\n'), out = [];
-        let depth = 0;
+        const raw = src.split('\n'), out = [], open = [];   // open: the kinds of the blocks open, outermost first
+        let indep = null;
         lines.forEach((l, i) => {
             const t = l.trim();
-            const opens = /^(function|ode|duplicate)\b/.test(t) || (depth > 0 && /^(if|for|while)\b/.test(t));
-            if (depth > 0 || opens || /^units\b/.test(t)) {
-                if (opens) depth++;
-                if (depth > 0 && /^end\b/.test(t)) depth--;
+            const opens = /^(function|ode|duplicate)\b/.test(t) || (open.length > 0 && /^(if|for|while)\b/.test(t));
+            const inOde = !opens && indep !== null && open.length === 1 && open[0] === 'ode' && !/^end\b/.test(t);
+            if (!inOde && (open.length > 0 || opens || /^units\b/.test(t))) {
+                if (opens) {
+                    open.push(t.match(/^\w+/)[0]);
+                    if (open.length === 1) { const h = t.match(/^ode\s+([A-Za-z_]\w*)\s*=/); indep = h ? h[1] : null; }
+                }
+                if (open.length > 0 && /^end\b/.test(t)) open.pop();
                 const shown = raw[i].replace(/\/\/.*$/, '').replace(/\s+$/, '');
                 if (shown.trim()) out.push({ text: shown });
                 return;
             }
             for (const part of l.split('\u0001')) {
                 if (!part.trim()) continue;
-                const m = equation(part);
-                out.push(m ? m : { text: part.trim() });
+                const m = equation(part, inOde ? indep : undefined);
+                out.push(m ? (inOde ? { ...m, inner: true } : m) : { text: (inOde ? '  ' : '') + part.trim() });
             }
         });
         return out;
     }
     // The page content (each equation carries its LaTeX, to copy it alone); for the clipboard, the equations as web content
     // (Word pastes MathML from HTML as its own equations; inline ones stay left-aligned) and, as plain text, their LaTeX
-    const html = (items) => items.map(it => it.math ? `<div class="fe-eq" title="Click to copy this equation" data-tex="${esc(it.tex)}">${it.math}</div>` : `<pre class="fe-text">${esc(it.text)}</pre>`).join('');
+    const html = (items) => items.map(it => it.math ? `<div class="fe-eq${it.inner ? ' fe-in' : ''}" title="Click to copy this equation" data-tex="${esc(it.tex)}">${it.math}</div>` : `<pre class="fe-text">${esc(it.text)}</pre>`).join('');
     const clipboard = (items) => items.filter(it => it.math).map(it => it.tex).join('\n');
     const clipboardHtml = (items) => items.filter(it => it.math).map(it => `<p>${it.math}</p>`).join('');
     return { ident, identTex, equation, render, html, clipboard, clipboardHtml };
