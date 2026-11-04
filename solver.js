@@ -590,6 +590,312 @@ class Quadrature {
 Quadrature.fn.rawArgs = true;
 if (typeof math !== 'undefined') math.import({ integral: Quadrature.fn }, { override: true });
 
+// Functions of Matlab that math.js lacks, for the equations and the console (Matlab's names, argument orders and conventions):
+// linspace, logspace, trapz, cumtrapz, polyfit, polyval, lsqfit (nonlinear least squares), normcdf, norminv, tcdf, tinv,
+// gammainc, betainc, expint, erfinv. Arrays come back as math.js matrices. The special functions follow Numerical Recipes
+// (W. H. Press et al., 3rd ed., 2007: series and continued fractions, Secs. 6.2, 6.3 and 6.4), checked against Abramowitz and
+// Stegun; inverses by Newton's method on the function itself.
+const MathX = (() => {
+    const arr = (v, what) => {
+        const a = v && typeof v.toArray === 'function' ? v.toArray() : v;
+        if (!Array.isArray(a)) throw new Error(`${what} must be an array`);
+        const f = a.flat(Infinity).map(x => { const n = typeof x === 'number' ? x : Number(x); if (!Number.isFinite(n)) throw new Error(`${what} has an entry that is not a number`); return n; });
+        return f;
+    };
+    const num = (v, what) => { const n = Number(v); if (typeof v === 'object' || !Number.isFinite(n)) throw new Error(`${what} must be a number`); return n; };
+    const out = (a) => math.matrix(a);
+    const linspace = (a, b, n = 100) => {
+        a = num(a, 'linspace(): a'); b = num(b, 'linspace(): b'); n = num(n, 'linspace(): n');
+        if (!(Number.isInteger(n) && n >= 2)) throw new Error('linspace(): n must be a whole number of 2 or more');
+        return out(Array.from({ length: n }, (_, k) => k === n - 1 ? b : a + (b - a) * k / (n - 1)));
+    };
+    const logspace = (a, b, n = 50) => out(linspace(a, b, n).toArray().map(v => 10 ** v));
+    const xy = (fn, x, y) => {
+        if (y === undefined) { y = arr(x, `${fn}(): y`); x = y.map((_, k) => k + 1); }
+        else { x = arr(x, `${fn}(): x`); y = arr(y, `${fn}(): y`); }
+        if (x.length !== y.length) throw new Error(`${fn}(): x and y have ${x.length} and ${y.length} values`);
+        if (x.length < 2) throw new Error(`${fn}(): at least 2 points are needed`);
+        return [x, y];
+    };
+    const trapz = (x, y) => { [x, y] = xy('trapz', x, y); let s = 0; for (let k = 1; k < x.length; k++) s += (x[k] - x[k - 1]) * (y[k] + y[k - 1]) / 2; return s; };
+    const cumtrapz = (x, y) => { [x, y] = xy('cumtrapz', x, y); const c = [0]; for (let k = 1; k < x.length; k++) c.push(c[k - 1] + (x[k] - x[k - 1]) * (y[k] + y[k - 1]) / 2); return out(c); };
+    // Linear least squares by Householder QR: A p = y. -> p, and the covariance of p (s^2 (A'A)^-1), R^2 and rms residual
+    const lstsq = (A, y, fn) => {
+        const m = A.length, n = A[0].length;
+        if (m < n) throw new Error(`${fn}(): ${m} points cannot fix ${n} parameters`);
+        const Q = A.map(r => r.slice()), b = y.slice(), R = Array.from({ length: n }, () => new Array(n).fill(0));
+        for (let j = 0; j < n; j++) {
+            let nrm = 0; for (let i = j; i < m; i++) nrm += Q[i][j] ** 2; nrm = Math.sqrt(nrm);
+            if (!(nrm > 1e-300)) throw new Error(`${fn}(): the parameters cannot all be found from these points (the columns are dependent)`);
+            const alpha = Q[j][j] > 0 ? -nrm : nrm, v = Q.map((r, i) => (i < j ? 0 : r[j])); v[j] -= alpha;
+            const vv = v.reduce((s, t) => s + t * t, 0);
+            for (let k = j; k < n; k++) { let d = 0; for (let i = j; i < m; i++) d += v[i] * Q[i][k]; d = 2 * d / vv; for (let i = j; i < m; i++) Q[i][k] -= d * v[i]; }
+            let d = 0; for (let i = j; i < m; i++) d += v[i] * b[i]; d = 2 * d / vv; for (let i = j; i < m; i++) b[i] -= d * v[i];
+        }
+        for (let i = 0; i < n; i++) for (let k = i; k < n; k++) R[i][k] = Q[i][k];
+        if (R.some((r, i) => Math.abs(r[i]) < 1e-14 * Math.abs(R[0][0]))) throw new Error(`${fn}(): the parameters cannot all be found from these points (the columns are dependent)`);
+        const p = new Array(n).fill(0);
+        for (let i = n - 1; i >= 0; i--) { let s = b[i]; for (let k = i + 1; k < n; k++) s -= R[i][k] * p[k]; p[i] = s / R[i][i]; }
+        const res = y.map((yi, i) => yi - A[i].reduce((s, a, k) => s + a * p[k], 0)), sse = res.reduce((s, r) => s + r * r, 0);
+        const Ri = Array.from({ length: n }, () => new Array(n).fill(0));   // R^-1, so (A'A)^-1 = R^-1 R^-T
+        for (let j = 0; j < n; j++) { Ri[j][j] = 1 / R[j][j]; for (let i = j - 1; i >= 0; i--) { let s = 0; for (let k = i + 1; k <= j; k++) s += R[i][k] * Ri[k][j]; Ri[i][j] = -s / R[i][i]; } }
+        const s2 = m > n ? sse / (m - n) : NaN, ym = y.reduce((s, v) => s + v, 0) / m, sst = y.reduce((s, v) => s + (v - ym) ** 2, 0);
+        const se = Ri.map(r => Math.sqrt(s2 * r.reduce((s, v) => s + v * v, 0)));
+        return { p, se, r2: sst > 0 ? 1 - sse / sst : 1, rmse: m > n ? Math.sqrt(sse / (m - n)) : 0, res, y, dof: m - n };   // rmse with m - n degrees of freedom, as Matlab's fit reports it
+    };
+    // What a fit returns: the parameters, or (last arguments) 'stderr', 'r2', 'adjr2', 'rmse', 'resid' (y - fit), 'fit' (the
+    // fitted values), 'tstat' (parameter/standard error), 'pvalue' (two-sided, for parameter = 0: below 0.05, the parameter is
+    // significant at the 5 % level), 'ci' (confidence intervals, one row [low, high] per parameter, 95 % or the level given),
+    // 'summary' (one row per parameter: value, standard error, t, p).
+    const pick = (fit, what, fn, level) => {
+        const w = what === undefined ? 'p' : String(what).trim().toLowerCase();
+        if (w === 'p') return out(fit.p);
+        if (w === 'r2') return fit.r2;
+        if (w === 'rmse') return fit.rmse;
+        if (w === 'resid') return out(fit.res);
+        if (w === 'fit') return out(fit.y.map((v, i) => v - fit.res[i]));
+        if (w === 'adjr2') { if (!(fit.dof > 0)) throw new Error(`${fn}(): the adjusted R^2 needs more points than parameters`); return 1 - (1 - fit.r2) * (fit.y.length - 1) / fit.dof; }
+        const stats = ['stderr', 'tstat', 'pvalue', 'ci', 'summary'];
+        if (!stats.includes(w)) throw new Error(`${fn}(): the last argument is one of 'stderr', 'r2', 'adjr2', 'rmse', 'resid', 'fit', 'tstat', 'pvalue', 'ci', 'summary'`);
+        if (!(fit.dof > 0) || !fit.se.every(Number.isFinite)) throw new Error(`${fn}(): the statistics of the parameters need more points than parameters`);
+        if (w === 'stderr') return out(fit.se);
+        const t = fit.p.map((v, i) => fit.se[i] > 0 ? v / fit.se[i] : (v === 0 ? 0 : Infinity));
+        const pv = t.map(x => Number.isFinite(x) ? Math.min(1, 2 * tcdf(-Math.abs(x), fit.dof)) : 0);
+        if (w === 'tstat') return out(t);
+        if (w === 'pvalue') return out(pv);
+        if (w === 'summary') return out(fit.p.map((v, i) => [v, fit.se[i], t[i], pv[i]]));
+        const L = level === undefined ? 0.95 : num(level, `${fn}(): the confidence level`);
+        if (!(L > 0 && L < 1)) throw new Error(`${fn}(): the confidence level is between 0 and 1, as 0.95`);
+        const k = tinv(1 - (1 - L) / 2, fit.dof);
+        return out(fit.p.map((v, i) => [v - k * fit.se[i], v + k * fit.se[i]]));
+    };
+    const polyfit = (x, y, n, what, level) => {
+        x = arr(x, 'polyfit(): x'); y = arr(y, 'polyfit(): y'); n = num(n, 'polyfit(): n');
+        if (x.length !== y.length) throw new Error(`polyfit(): x and y have ${x.length} and ${y.length} values`);
+        if (!(Number.isInteger(n) && n >= 0)) throw new Error('polyfit(): the degree n must be a whole number');
+        const A = x.map(xi => Array.from({ length: n + 1 }, (_, k) => xi ** (n - k)));   // highest power first, as Matlab
+        return pick(lstsq(A, y, 'polyfit'), what, 'polyfit', level);
+    };
+    // regress(y, X): multiple linear regression y = X b, as Matlab's regress: one column of X per term, and a column of ones
+    // for a constant term. X may be one column (a vector). Same last arguments as polyfit.
+    const regress = (y, X, what, level) => {
+        y = arr(y, 'regress(): y');
+        const Xa = X && typeof X.toArray === 'function' ? X.toArray() : X;
+        if (!Array.isArray(Xa)) throw new Error('regress(): X must be a matrix, one column per term');
+        const A = Array.isArray(Xa[0]) ? Xa.map(r => arr(r, 'regress(): X')) : arr(Xa, 'regress(): X').map(v => [v]);
+        if (A.length !== y.length) throw new Error(`regress(): y has ${y.length} values and X has ${A.length} rows; X needs one row per point`);
+        if (!A.every(r => r.length === A[0].length)) throw new Error('regress(): the rows of X have different lengths');
+        return pick(lstsq(A, y, 'regress'), what, 'regress', level);
+    };
+    const polyval = (p, x) => {
+        p = arr(p, 'polyval(): p');
+        const ev = (t) => p.reduce((s, c) => s * t + c, 0);
+        if (x && typeof x === 'object') return out(arr(x, 'polyval(): x').map(ev));
+        return ev(num(x, 'polyval(): x'));
+    };
+    // lsqfit('a*exp(-b*x)', x, y, 'a b', [a0, b0]): Levenberg-Marquardt, the Jacobian by central differences
+    const cache = new Map();
+    const lsqfit = (model, x, y, names, guess, what, level) => {
+        const fn = 'lsqfit';
+        x = arr(x, 'lsqfit(): x'); y = arr(y, 'lsqfit(): y');
+        if (x.length !== y.length) throw new Error(`lsqfit(): x and y have ${x.length} and ${y.length} values`);
+        const pn = String(names).trim().split(/[\s,]+/), p0 = guess && typeof guess === 'object' ? arr(guess, 'lsqfit(): the guesses') : [num(guess, 'lsqfit(): the guess')];
+        if (pn.length !== p0.length) throw new Error(`lsqfit(): ${pn.length} parameter names and ${p0.length} guesses`);
+        const key = JSON.stringify([model, x, y, pn, p0]);
+        let fit = cache.get(key);
+        if (!fit) {
+            let code;
+            try { code = math.compile(String(model)); } catch (e) { throw new Error(`lsqfit(): the model '${model}' cannot be read: ${e.message}`); }
+            const f = (p, xi) => { const sc = { x: xi }; pn.forEach((nm, k) => { sc[nm] = p[k]; }); const v = code.evaluate(sc); if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`lsqfit(): the model gives '${v}' at x = ${xi}`); return v; };
+            const resid = (p) => x.map((xi, i) => y[i] - f(p, xi)), sse = (r) => r.reduce((s, v) => s + v * v, 0);
+            const jac = (p) => x.map(xi => p.map((pk, k) => { const h = 1e-6 * Math.max(Math.abs(pk), 1e-3), a = p.slice(), b = p.slice(); a[k] += h; b[k] -= h; return (f(a, xi) - f(b, xi)) / (2 * h); }));
+            let p = p0.slice(), r = resid(p), S = sse(r), lam = 1e-3;
+            for (let it = 0; it < 500; it++) {
+                const J = jac(p), n = p.length;
+                const JtJ = Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => J.reduce((s, row) => s + row[i] * row[j], 0)));
+                const g = Array.from({ length: n }, (_, i) => J.reduce((s, row, k) => s + row[i] * r[k], 0));
+                let improved = false;
+                for (let tries = 0; tries < 30 && !improved; tries++) {
+                    const M = JtJ.map((row, i) => [...row.map((v, j) => v + (i === j ? lam * (row[i] || 1e-12) : 0)), g[i]]);
+                    let dp;
+                    try { dp = Chem.gauss(M, 'lsqfit'); } catch (e) { lam *= 10; continue; }
+                    const pt = p.map((v, i) => v + dp[i]);
+                    let rt, St;
+                    try { rt = resid(pt); St = sse(rt); } catch (e) { lam *= 10; continue; }
+                    if (St <= S) { const done = Math.abs(S - St) <= 1e-15 * Math.max(S, 1e-300) || dp.every((d, i) => Math.abs(d) <= 1e-12 * Math.max(Math.abs(pt[i]), 1e-12)); p = pt; r = rt; S = St; lam = Math.max(lam / 10, 1e-12); improved = true; if (done) it = 500; }
+                    else lam *= 10;
+                }
+                if (!improved) break;
+            }
+            fit = { ...lstsq(jac(p), r, fn), p };   // the covariance from the linearized problem at the optimum
+            const ym = y.reduce((s, v) => s + v, 0) / y.length, sst = y.reduce((s, v) => s + (v - ym) ** 2, 0);
+            fit.r2 = sst > 0 ? 1 - S / sst : 1; fit.rmse = y.length > p.length ? Math.sqrt(S / (y.length - p.length)) : 0;
+            fit.res = r; fit.y = y;   // the residuals of the model itself, not of the last linearized step
+            cache.set(key, fit); if (cache.size > 200) cache.delete(cache.keys().next().value);
+        }
+        return pick(fit, what, fn, level);
+    };
+    // Special functions
+    // ln Gamma(x), x > 0: Lanczos series of Numerical Recipes, 3rd ed. (2007), sec. 6.1, good to about 1e-15.
+    // (math.lgamma is off by 2e-12 at x = 1/2, which showed up in tcdf.)
+    const LANCZOS = [57.1562356658629235, -59.5979603554754912, 14.1360979747417471, -0.491913816097620199, .339946499848118887e-4, .465236289270485756e-4, -.983744753048795646e-4,
+        .158088703224912494e-3, -.210264441724104883e-3, .217439618115212643e-3, -.164318106536763890e-3, .844182239838527433e-4, -.261908384015814087e-4, .368991826595316234e-5];
+    const gln = (x) => {
+        let y = x, t = x + 5.2421875, ser = 0.999999999999997092; t = (x + 0.5) * Math.log(t) - t;
+        for (const c of LANCZOS) ser += c / ++y;
+        return t + Math.log(2.5066282746310005 * ser / x);
+    };
+    // [P, Q] of the regularized incomplete gamma, each computed directly where it is the small one: series or continued fraction
+    const gammaPQ = (a, x) => {
+        if (x === 0) return [0, 1];
+        const pre = Math.exp(-x + a * Math.log(x) - gln(a));
+        if (x < a + 1) { let ap = a, sum = 1 / a, del = sum; for (let n = 0; n < 1000; n++) { ap++; del *= x / ap; sum += del; if (Math.abs(del) < Math.abs(sum) * 1e-16) break; } const P = sum * pre; return [P, 1 - P]; }
+        let b = x + 1 - a, c = 1e300, d = 1 / b, h = d;
+        for (let i = 1; i < 1000; i++) { const an = -i * (i - a); b += 2; d = an * d + b; if (Math.abs(d) < 1e-300) d = 1e-300; c = b + an / c; if (Math.abs(c) < 1e-300) c = 1e-300; d = 1 / d; const del = d * c; h *= del; if (Math.abs(del - 1) < 1e-16) break; }
+        const Q = pre * h; return [1 - Q, Q];
+    };
+    const gammainc = (x, a, tail) => {   // regularized incomplete gamma: P(a, x), or Q(a, x) with 'upper', as Matlab's gammainc(x, a)
+        x = num(x, 'gammainc(): x'); a = num(a, 'gammainc(): a');
+        if (!(x >= 0 && a > 0)) throw new Error('gammainc(): needs x >= 0 and a > 0');
+        const t = tail === undefined ? 'lower' : String(tail).trim().toLowerCase();
+        if (t !== 'lower' && t !== 'upper') throw new Error("gammainc(): the third argument is 'lower' or 'upper'");
+        return gammaPQ(a, x)[t === 'upper' ? 1 : 0];
+    };
+    const betacf = (a, b, x) => {
+        let qab = a + b, qap = a + 1, qam = a - 1, c = 1, d = 1 - qab * x / qap; if (Math.abs(d) < 1e-300) d = 1e-300; d = 1 / d; let h = d;
+        for (let m = 1; m < 1000; m++) {
+            const m2 = 2 * m; let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+            d = 1 + aa * d; if (Math.abs(d) < 1e-300) d = 1e-300; c = 1 + aa / c; if (Math.abs(c) < 1e-300) c = 1e-300; d = 1 / d; h *= d * c;
+            aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+            d = 1 + aa * d; if (Math.abs(d) < 1e-300) d = 1e-300; c = 1 + aa / c; if (Math.abs(c) < 1e-300) c = 1e-300; d = 1 / d; const del = d * c; h *= del;
+            if (Math.abs(del - 1) < 1e-16) break;
+        }
+        return h;
+    };
+    const betainc = (x, a, b) => {   // regularized incomplete beta I_x(a, b), Matlab's betainc(x, a, b)
+        x = num(x, 'betainc(): x'); a = num(a, 'betainc(): a'); b = num(b, 'betainc(): b');
+        if (!(x >= 0 && x <= 1 && a > 0 && b > 0)) throw new Error('betainc(): needs 0 <= x <= 1, a > 0 and b > 0');
+        if (x === 0 || x === 1) return x;
+        const bt = Math.exp(gln(a + b) - gln(a) - gln(b) + a * Math.log(x) + b * Math.log(1 - x));
+        return x < (a + 1) / (a + b + 2) ? bt * betacf(a, b, x) / a : 1 - bt * betacf(b, a, 1 - x) / b;
+    };
+    const expint = (x) => {   // E1(x), x > 0
+        x = num(x, 'expint(): x');
+        if (!(x > 0)) throw new Error('expint(): x must be positive (E1 of a real argument)');
+        if (x > 1) { let b = x + 1, c = 1e300, d = 1 / b, h = d; for (let i = 1; i < 1000; i++) { const an = -i * i; b += 2; d = 1 / (an * d + b); c = b + an / c; const del = c * d; h *= del; if (Math.abs(del - 1) < 1e-16) break; } return h * Math.exp(-x); }
+        let ans = -Math.log(x) - 0.57721566490153286, fact = 1;
+        for (let i = 1; i < 1000; i++) { fact *= -x / i; const del = -fact / i; ans += del; if (Math.abs(del) < Math.abs(ans) * 1e-16) break; }
+        return ans;
+    };
+    const newton = (f, df, x, lo, hi) => { for (let it = 0; it < 100; it++) { const dx = f(x) / df(x); let xn = x - dx; if (lo !== undefined) xn = Math.min(Math.max(xn, lo), hi); if (Math.abs(xn - x) <= 1e-15 * Math.max(1, Math.abs(xn))) return xn; x = xn; } return x; };
+    const erfinv = (y) => {
+        y = num(y, 'erfinv(): y');
+        if (!(y > -1 && y < 1)) { if (y === 1) return Infinity; if (y === -1) return -Infinity; throw new Error('erfinv(): y must be between -1 and 1'); }
+        const w = Math.log((1 - y) * (1 + y)), x0 = Math.sign(y) * Math.sqrt(Math.sqrt((2 / (Math.PI * 0.147) + w / 2) ** 2 - w / 0.147) - (2 / (Math.PI * 0.147) + w / 2));   // Winitzki's approximation
+        return newton((x) => math.erf(x) - y, (x) => 2 / Math.sqrt(Math.PI) * Math.exp(-x * x), x0);
+    };
+    const normcdf = (x, mu = 0, sigma = 1) => {
+        x = num(x, 'normcdf(): x'); mu = num(mu, 'normcdf(): mu'); sigma = num(sigma, 'normcdf(): sigma');
+        if (!(sigma > 0)) throw new Error('normcdf(): sigma must be positive');
+        const z = (x - mu) / (sigma * Math.SQRT2);
+        return z < 0 ? 0.5 * gammaPQ(0.5, z * z)[1] : 0.5 * (1 + math.erf(z));   // the lower tail as erfc(-z)/2 = Q(1/2, z^2)/2
+    };
+    const norminv = (p, mu = 0, sigma = 1) => {
+        p = num(p, 'norminv(): p'); mu = num(mu, 'norminv(): mu'); sigma = num(sigma, 'norminv(): sigma');
+        if (!(p > 0 && p < 1)) throw new Error('norminv(): p must be between 0 and 1');
+        if (!(sigma > 0)) throw new Error('norminv(): sigma must be positive');
+        const z = p < 0.5 ? -Math.SQRT2 * erfinv(1 - 2 * p) : Math.SQRT2 * erfinv(2 * p - 1);
+        return mu + sigma * z;
+    };
+    const tcdf = (t, nu) => {
+        t = num(t, 'tcdf(): t'); nu = num(nu, 'tcdf(): nu');
+        if (!(nu > 0)) throw new Error('tcdf(): the degrees of freedom nu must be positive');
+        const ib = betainc(nu / (nu + t * t), nu / 2, 0.5);
+        return t >= 0 ? 1 - ib / 2 : ib / 2;
+    };
+    const tinv = (p, nu) => {
+        p = num(p, 'tinv(): p'); nu = num(nu, 'tinv(): nu');
+        if (!(p > 0 && p < 1)) throw new Error('tinv(): p must be between 0 and 1');
+        if (!(nu > 0)) throw new Error('tinv(): the degrees of freedom nu must be positive');
+        const pdf = (t) => Math.exp(gln((nu + 1) / 2) - gln(nu / 2) - 0.5 * Math.log(nu * Math.PI) - (nu + 1) / 2 * Math.log(1 + t * t / nu));
+        let lo = -1, hi = 1; while (tcdf(lo, nu) > p) lo *= 2; while (tcdf(hi, nu) < p) hi *= 2;
+        let t = norminv(p); t = Math.min(Math.max(t, lo), hi);
+        for (let it = 0; it < 200; it++) {
+            const f = tcdf(t, nu) - p; if (f > 0) hi = t; else lo = t;
+            let tn = t - f / pdf(t); if (!(tn > lo && tn < hi)) tn = (lo + hi) / 2;
+            if (Math.abs(tn - t) <= 1e-14 * Math.max(1, Math.abs(tn))) return tn;
+            t = tn;
+        }
+        return t;
+    };
+    // roots(p): the roots of a polynomial of any degree, coefficients highest power first (Matlab's order), by the Aberth-Ehrlich
+    // method (simultaneous Newton steps with repulsion between the estimates; O. Aberth, Math. Comp. 27, 1973), then polished by
+    // Newton's method on the polynomial. In equations: the real roots, smallest first. roots(p, 'all'): every root, complex ones too.
+    const roots = (p, what) => {
+        let c = arr(p, 'roots(): p');
+        while (c.length && c[0] === 0) c.shift();
+        let zeros = 0; while (c.length > 1 && c[c.length - 1] === 0) { c.pop(); zeros++; }
+        const n = c.length - 1;
+        if (c.length === 0) throw new Error('roots(): every coefficient is 0');
+        const all = what !== undefined && String(what).trim().toLowerCase() === 'all';
+        if (what !== undefined && !all) throw new Error("roots(): the second argument may only be 'all'");
+        const z = [];
+        if (n >= 1) {
+            const a = c.map(v => v / c[0]);   // monic
+            const ev = (re, im) => {   // p(z) and p'(z) by Horner, complex
+                let pr = 1, pi = 0, dr = 0, di = 0;
+                for (let k = 1; k <= n; k++) {
+                    const ndr = dr * re - di * im + pr, ndi = dr * im + di * re + pi; dr = ndr; di = ndi;
+                    const npr = pr * re - pi * im + a[k], npi = pr * im + pi * re; pr = npr; pi = npi;
+                }
+                return [pr, pi, dr, di];
+            };
+            const R = 1 + Math.max(...a.slice(1).map(Math.abs));   // Cauchy's bound on the roots
+            const r0 = Math.min(R, Math.max(...a.slice(1).map((v, k) => Math.abs(v) ** (1 / (k + 1)))) || 1);
+            for (let k = 0; k < n; k++) { const t = 2 * Math.PI * k / n + 0.4; z.push([r0 * Math.cos(t), r0 * Math.sin(t)]); }
+            for (let it = 0; it < 1000; it++) {
+                let moved = 0;
+                for (let k = 0; k < n; k++) {
+                    const [pr, pi, dr, di] = ev(z[k][0], z[k][1]);
+                    if (pr === 0 && pi === 0) continue;
+                    const dd = dr * dr + di * di; if (dd === 0) { z[k][0] += 1e-8; continue; }
+                    const wr = (pr * dr + pi * di) / dd, wi = (pi * dr - pr * di) / dd;   // w = p/p'
+                    let sr = 0, si = 0;
+                    for (let j = 0; j < n; j++) if (j !== k) { const xr = z[k][0] - z[j][0], xi = z[k][1] - z[j][1], q = xr * xr + xi * xi || 1e-300; sr += xr / q; si -= xi / q; }
+                    const br = 1 - (wr * sr - wi * si), bi = -(wr * si + wi * sr), bb = br * br + bi * bi || 1e-300;   // offset = w/(1 - w S)
+                    const or = (wr * br + wi * bi) / bb, oi = (wi * br - wr * bi) / bb;
+                    z[k][0] -= or; z[k][1] -= oi;
+                    moved = Math.max(moved, Math.hypot(or, oi) / Math.max(1, Math.hypot(z[k][0], z[k][1])));
+                }
+                if (moved < 1e-15) break;
+            }
+            for (const w of z) for (let it = 0; it < 3; it++) {   // polish (it does nothing harmful at a multiple root)
+                const [pr, pi, dr, di] = ev(w[0], w[1]), dd = dr * dr + di * di;
+                if (!(dd > 0)) break;
+                const nr = w[0] - (pr * dr + pi * di) / dd, ni = w[1] - (pi * dr - pr * di) / dd;
+                const [qr, qi] = ev(nr, ni);
+                if (Math.hypot(qr, qi) < Math.hypot(pr, pi)) { w[0] = nr; w[1] = ni; } else break;
+            }
+        }
+        for (let k = 0; k < zeros; k++) z.push([0, 0]);
+        // real if the imaginary part is negligible against the root's size (multiple roots come out to about eps^(1/m))
+        z.forEach(w => { if (Math.abs(w[1]) <= 1e-7 * Math.max(1, Math.hypot(w[0], w[1]))) w[1] = 0; });
+        z.sort((u, v) => u[0] - v[0] || u[1] - v[1]);
+        if (all) return out(z.map(([re, im]) => im === 0 ? re : math.complex(re, im)));
+        const real = z.filter(w => w[1] === 0).map(w => w[0]);
+        if (!real.length) throw new Error("roots(): the polynomial has no real roots; roots(p, 'all') on the console gives the complex ones");
+        return out(real);
+    };
+    const factorialln = (x) => {   // ln(x!) = ln Gamma(x + 1), for numbers too large for factorial(): factorialln(1000) = 5912.128...
+        x = num(x, 'factorialln(): n');
+        if (!(x >= 0)) throw new Error('factorialln(): n must be 0 or more');
+        return gln(x + 1);
+    };
+    const fns = { linspace, logspace, trapz, cumtrapz, polyfit, polyval, lsqfit, gammainc, betainc, expint, erfinv, normcdf, norminv, tcdf, tinv, roots, factorialln, regress };
+    return { fns, names: Object.keys(fns) };
+})();
+if (typeof math !== 'undefined') math.import(MathX.fns, { override: true });
+
 class ParametricController {
     constructor(parser, solverClass) {
         this.parser = parser;

@@ -691,7 +691,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const plotData = tb.rows.map(r => Object.fromEntries(tb.cols.map((k, i) => [k, toDisp(k, r[i])])));
                 updatePlotControls(plotData, tb.indep, tb.states[0]);
                 renderPlot(plotData, plotXSelect.value, plotYSelect.value, plotTypeSelect.value, plotOverlayCheck.checked);
-               console.log(`ode block, line ${tb.no}: ${tb.rows.length} output rows (${tb.steps} internal steps); plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
+                console.log(`ode block, line ${tb.no}: ${tb.rows.length} output rows (${tb.steps} internal steps); plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
             }
             if (parser.plots.length) drawPlotLines(parser.plots, currentResults());
         } catch (err) {
@@ -1302,6 +1302,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (v && v.isNode) return v.toString();
             if (typeof v === 'function') return `function ${v.name || ''}`.trim();
             if (typeof v === 'number') return String(+v.toPrecision(10));
+            if (math.isBigNumber(v)) return v.isInteger() && v.abs().lt(math.bignumber(10).pow(math.config().precision)) ? math.format(v, { notation: 'fixed' }) : v.toString();
             return math.format(v, { precision: 10 });
         };
         input.addEventListener('keydown', (e) => {
@@ -1333,6 +1334,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 const base = {};
                 (currentResults() || new Map()).forEach((v, k) => { base[k] = v; });
                 const scope = Object.assign(BoundedSolver.prototype.createScopeWithCoolProp(base), kept);
+                // digits(n): significant digits of bignumber() arithmetic (math.js's precision; 64 at the start), console only
+                scope.digits = (n) => {
+                    n = Number(n);
+                    if (!(Number.isInteger(n) && n >= 1 && n <= 100000)) throw new Error('digits(): give a whole number of digits, 1 to 100000');
+                    math.config({ precision: n });
+                    return `bignumber() arithmetic now keeps ${n} significant digits`;
+                };
                 const v = Interp.collect(() => node.compile().evaluate(scope));
                 if (node.isAssignmentNode && node.object.isSymbolNode && !node.index) kept[node.object.name] = v;
                 if (node.isFunctionAssignmentNode) kept[node.name] = v;
