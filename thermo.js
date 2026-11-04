@@ -913,13 +913,18 @@ class StdAtmosphere {
 // through CoolProp's fit of them (INCOMP::MITSW, within 0.06 % of the MIT seawater property tables); the viscosity straight
 // from the paper's correlation (CoolProp's fit of it is up to 0.8 % off), mu_w(t) (1 + A S + B S^2), t in degC. These are
 // correlations at atmospheric pressure (at the vapor pressure above 100 degC) and do not depend on pressure; CoolProp is called
-// at 1 MPa, above the vapor pressure up to 120 degC, since it refuses a pressure below it.
+// at 1 MPa, above the vapor pressure up to 120 degC, since it refuses a pressure below it. The boiling-point elevation is the
+// paper's correlation, BPE = A S^2 + B S with S in g/kg and A, B quadratic in t (degC).
 // oceandepth(P, lat) and oceanpressure(z, lat): N. P. Fofonoff and R. C. Millard, Algorithms for computation of fundamental
 // properties of seawater, UNESCO Technical Papers in Marine Science 44, 1983 (after Saunders and Fofonoff 1976): the depth of
 // the standard ocean (0 degC, S = 35) from the sea pressure p = P - 101325 Pa, in dbar; check value 9712.653 m at 10000 dbar,
 // 30 deg. lat in radians. oceanpressure inverts it by bisection.
 class Seawater {
-    static OUT = { rho: 1, cp: 1, k: 1, mu: 1, nu: 1, alpha: 1, pr: 1 };
+    static OUT = { rho: 1, cp: 1, k: 1, mu: 1, nu: 1, alpha: 1, pr: 1, bpe: 1 };
+    static bpe(T, S) {
+        const t = T - 273.15, s = S * 1000, A = (-4.584e-4 * t * t + 2.823e-1 * t + 17.95) * 1e-6, B = (1.536e-4 * t * t + 5.267e-2 * t + 6.56) * 1e-3;
+        return A * s * s + B * s;
+    }
     static mu(T, S) {
         const t = T - 273.15, A = 1.541 + 1.998e-2 * t - 9.52e-5 * t * t, B = 7.974 - 7.561e-2 * t + 4.724e-4 * t * t;
         return (4.2844e-5 + 1 / (0.157 * (t + 64.993) ** 2 - 91.296)) * (1 + A * S + B * S * S);
@@ -930,7 +935,7 @@ class Seawater {
         const CP = ThermoEngine.CP, f = `INCOMP::MITSW[${S}]`, T1 = Math.min(Math.max(T, 273.15), 393.15);
         const get = (k) => { const v = CP.PropsSI(k, 'T', T1, 'P', 1e6, f); if (!Number.isFinite(v)) ThermoEngine.fail(CP, `seawater ${k} at T = ${T} K, S = ${S}`); return v; };
         const rho = get('D'), cp = get('C'), k = get('L'), mu = Seawater.mu(T1, S);
-        return { rho, cp, k, mu, nu: mu / rho, alpha: k / (rho * cp), pr: mu * cp / k };
+        return { rho, cp, k, mu, nu: mu / rho, alpha: k / (rho * cp), pr: mu * cp / k, bpe: Seawater.bpe(T1, S) };
     }
     static depth(P, lat) {   // P absolute, Pa
         const p = (P - 101325) / 1e4, x = Math.sin(lat) ** 2;
@@ -942,7 +947,7 @@ class Seawater {
         if (name === 'seawater') {
             if (a.length !== 3) throw new Error("seawater(): use seawater('output', T, S), T in K and S the salinity in kg/kg");
             const o = String(a[0]).trim().toLowerCase();
-            if (!(o in S.OUT)) throw new Error(`seawater(): '${a[0]}' should be one of 'rho', 'cp', 'k', 'mu', 'nu', 'alpha', 'Pr'`);
+            if (!(o in S.OUT)) throw new Error(`seawater(): '${a[0]}' should be one of 'rho', 'cp', 'k', 'mu', 'nu', 'alpha', 'Pr', 'BPE'`);
             return S.props(num(a[1], 'seawater() T'), num(a[2], 'seawater() S'))[o];
         }
         if (a.length !== 2) throw new Error(`${name}(): use ${name === 'oceandepth' ? 'oceandepth(P, lat), P the absolute pressure in Pa' : 'oceanpressure(z, lat), z the depth in m'} and lat the latitude in radians (tag it [deg])`);
@@ -957,6 +962,459 @@ class Seawater {
         let lo = 101325, hi = Pmax;
         for (let it = 0; it < 200 && hi - lo > 1e-7; it++) { const m = (lo + hi) / 2; if (S.depth(m, lat) < v) lo = m; else hi = m; }
         return (lo + hi) / 2;
+    }
+}
+
+// Mixtures of CoolProp's pure fluids, by mole fraction. Both functions take the keys of nh3h2o(): T, P, x (the overall mole
+// fraction of the first fluid named, or an array of all of them), q (the molar vapor fraction; -0.001 for subcooled liquid and
+// 1.001 for superheated vapor) and h; h, s, u and v are per kg.
+// idealmixture(): an ideal liquid solution in equilibrium with an ideal-gas vapor, Raoult's law  y_i P = x_i Psat_i(T), for any
+// number of fluids. The liquid: the pure saturated liquids at T (the effect of pressure neglected) with the ideal entropy of
+// mixing; the vapor: the pure gases at their partial pressures y_i P (CoolProp), so pure-fluid limits are exact.
+// mixture(): CoolProp's multi-fluid equation of state (the form of GERG-2008, with the parameters CoolProp has for each pair),
+// only for fluids whose every pair has them. The phase equilibrium is solved here, from the fugacity coefficients of each
+// phase: CoolProp's own mixture flash finds the state but cannot return the compositions of the phases in this build.
+// Both share one solver: K_i = y_i/x_i is Psat_i/P (ideal) or phi_i(liquid)/phi_i(vapor) (real), the Rachford-Rice equation
+//     sum z_i (K_i - 1)/(1 + q (K_i - 1)) = 0
+// (q = 0 at the bubble point, q = 1 at the dew point) is solved for the unknown of the state, with the compositions of the
+// phases updated by successive substitution, to 1e-9 in ln K (CoolProp's fugacity coefficients scatter by about 1e-10). The real model starts from Wilson's K-values, K_i = (Pc_i/P) exp(5.373 (1 + w_i)
+// (1 - Tc_i/T)). CoolProp's exceptions leak memory in this build, so the fluids of each mixture are checked once and cached.
+class Mixtures {
+    static R = 8.314462618;
+    static cache = new Map();    // the fluids of each mixture named
+    static states = new Map();   // the last 500 states computed (the solver asks for several outputs of the same state)
+    static info(spec, fn) {
+        const key = String(spec).trim();
+        if (Mixtures.cache.has(key)) return Mixtures.cache.get(key);
+        const CP = ThermoEngine.CP, parts = key.split('&').map(s => s.trim());
+        if (parts.length < 2 || parts.some(p => !p)) throw new Error(`${fn}(): name the fluids joined by &, as 'ethanol&water'`);
+        const names = parts.map(p => {
+            let n = '';
+            try { n = CP.get_fluid_param_string(p, 'name'); } catch (e) { }
+            if (!n) throw new Error(`${fn}(): '${p}' is not a CoolProp fluid (see Supported substances)`);
+            if (CP.get_fluid_param_string(n, 'pure') !== 'true') throw new Error(`${fn}(): '${p}' is itself a mixture; name pure fluids`);
+            return n;
+        });
+        if (new Set(names).size < names.length) throw new Error(`${fn}(): a fluid is named twice in '${key}'`);
+        const one = (k) => names.map(n => CP.Props1SI(n, k));
+        const c = { key, names, n: names.length, M: one('M'), Tc: one('Tcrit'), Pc: one('pcrit'), w: one('acentric'), Tmin: one('Tmin'), fitted: null, AS: null, vec: null };
+        Mixtures.cache.set(key, c);
+        return c;
+    }
+    // The real model: every pair must have its parameters in CoolProp (checked once)
+    static real(c, fn) {
+        const CP = ThermoEngine.CP;
+        if (c.fitted === null) {
+            const cas = c.names.map(n => CP.get_fluid_param_string(n, 'CAS'));
+            c.fitted = '';
+            for (let i = 0; i < c.n && !c.fitted; i++) for (let j = i + 1; j < c.n && !c.fitted; j++) {
+                let ok = false;
+                for (const [a, b] of [[cas[i], cas[j]], [cas[j], cas[i]]]) { try { CP.get_mixture_binary_pair_data(a, b, 'betaT'); ok = true; break; } catch (e) { } }
+                if (!ok) c.fitted = `${c.names[i]} and ${c.names[j]}`;
+            }
+            if (!c.fitted) { c.AS = CP.factory('HEOS', c.names.join('&')); c.vec = new CP.VectorDouble(); c.names.forEach(() => c.vec.push_back(0)); }
+        }
+        if (c.fitted) throw new Error(`${fn}(): CoolProp has no parameters for the pair ${c.fitted}; idealmixture() (Raoult's law) works for any fluids`);
+        return c;
+    }
+    // One phase of the real model at T, P and composition: ln phi_i, and h, s (molar) and v (m^3/mol)
+    static phaseReal(c, comp, T, P, liquid, fn) {
+        const CP = ThermoEngine.CP, AS = c.AS;
+        comp.forEach((v, i) => c.vec.set(i, v));
+        try {
+            AS.set_mole_fractions(c.vec);
+            AS.specify_phase(liquid ? CP.phases.iphase_liquid : CP.phases.iphase_gas);
+            AS.update(CP.input_pairs.PT_INPUTS, P, T);
+            const lnphi = comp.map((v, i) => Math.log(AS.fugacity_coefficient(i)));
+            const r = { lnphi, h: AS.hmolar(), s: AS.smolar(), v: 1 / AS.rhomolar() };
+            if (![...lnphi, r.h, r.s, r.v].every(Number.isFinite)) throw new Error('not finite');
+            return r;
+        } catch (e) {
+            throw new Error(`${fn}(): CoolProp could not evaluate the ${liquid ? 'liquid' : 'vapor'} of ${c.key} at T = ${+T.toPrecision(6)} K, P = ${+P.toPrecision(6)} Pa (near or above the critical region of the mixture?)`);
+        } finally { try { AS.unspecify_phase(); } catch (e) { } }
+    }
+    static psat(c, i, T, fn) {
+        if (!(T >= c.Tmin[i] && T <= c.Tc[i])) throw new Error(`${fn}(): Raoult's law needs the vapor pressure of ${c.names[i]}, known from ${+c.Tmin[i].toPrecision(6)} K to its critical temperature, ${+c.Tc[i].toPrecision(6)} K; T = ${+T.toPrecision(6)} K`);
+        return ThermoEngine.CP.PropsSI('P', 'T', T, 'Q', 0, c.names[i]);
+    }
+    // ln K_i at T, P for liquid x and vapor y
+    static lnK(m, T, P, x, y) {
+        const c = m.c;
+        if (m.ideal) return c.names.map((n, i) => Math.log(Mixtures.psat(c, i, T, m.fn) / P));
+        const L = Mixtures.phaseReal(c, x, T, P, true, m.fn), V = Mixtures.phaseReal(c, y, T, P, false, m.fn);
+        return L.lnphi.map((l, i) => l - V.lnphi[i]);
+    }
+    static wilson(c, T, P) { return c.names.map((n, i) => Math.log(c.Pc[i] / P) + 5.373 * (1 + c.w[i]) * (1 - c.Tc[i] / T)); }
+    static norm(a) { const s = a.reduce((p, v) => p + v, 0); return a.map(v => v / s); }
+    // The compositions of the phases and the Rachford-Rice residual at T, P for overall z and vapor fraction q, with the
+    // compositions converged by successive substitution from lnK0
+    static split(m, T, P, z, q, lnK0) {
+        let lnK = lnK0 || (m.ideal ? Mixtures.lnK(m, T, P, z, z) : Mixtures.wilson(m.c, T, P)), x, y;
+        for (let it = 0; it < 300; it++) {
+            const K = lnK.map(Math.exp);
+            x = Mixtures.norm(z.map((v, i) => v / (1 + q * (K[i] - 1))));
+            y = Mixtures.norm(x.map((v, i) => v * K[i]));
+            if (m.ideal) break;
+            const next = Mixtures.lnK(m, T, P, x, y), d = Math.max(...next.map((v, i) => Math.abs(v - lnK[i])));
+            lnK = next;
+            if (d < 1e-9) break;
+        }
+        const K = lnK.map(Math.exp);
+        return { x, y, lnK, g: z.reduce((s, v, i) => s + v * (K[i] - 1) / (1 + q * (K[i] - 1)), 0) };
+    }
+    // A root of f between a and b, where f changes sign (the Illinois method)
+    static bracketed(f, a, b, fa, fb, ftol = 0) {
+        let side = 0;
+        for (let it = 0; it < 300; it++) {
+            const c = (a * fb - b * fa) / (fb - fa), fc = f(c);
+            if (Math.abs(fc) <= ftol || Math.abs(b - a) <= 1e-14 * Math.max(1, Math.abs(c))) return c;
+            if (fc * fb < 0) { a = b; fa = fb; side = 0; } else { fa = side === -1 ? fa / 2 : fa; side = -1; }
+            b = c; fb = fc;
+        }
+        return b;
+    }
+    // A root of f near u0: steps of growing size on both sides until f changes sign, within lo to hi
+    static root(f, u0, step, lo, hi, what) {
+        const clip = (u) => Math.min(Math.max(u, lo), hi), a0 = clip(u0), f0 = f(a0);
+        if (f0 === 0) return a0;
+        const prev = { 1: [a0, f0], '-1': [a0, f0] };
+        for (let k = 0, s = step; k < 60; k++, s *= 1.6) {
+            for (const d of [1, -1]) {
+                const c = clip(a0 + d * s);
+                if (c === prev[d][0]) continue;
+                let fc; try { fc = f(c); } catch (e) { continue; }
+                if (!Number.isFinite(fc)) continue;
+                if (fc === 0) return c;
+                if (fc * f0 < 0) return Mixtures.bracketed(f, prev[d][0], c, prev[d][1], fc);
+                prev[d] = [c, fc];
+            }
+            if (clip(a0 + s) === hi && clip(a0 - s) === lo) break;
+        }
+        throw new Error(what);
+    }
+    // The Rachford-Rice residual with Wilson's K-values: a first estimate of a saturation state for the real model
+    static rrWilson(c, T, P, z, q) {
+        const K = Mixtures.wilson(c, T, P).map(Math.exp);
+        return z.reduce((s, v, i) => s + v * (K[i] - 1) / (1 + q * (K[i] - 1)), 0);
+    }
+    // The real model at the bubble (q = 0) or dew point (q = 1): the pressure at T (solveT false) or the temperature at P, with
+    // the composition w of the incipient phase updated at each step, as usual: S = sum z K (bubble) or sum z/K (dew) must be 1;
+    // P is multiplied (bubble) or divided (dew) by S, since K goes as 1/P; 1/T takes a secant step on ln S, the first with the
+    // slope of Wilson's K-values
+    static satReal(m, z, q, T, P, solveT) {
+        const c = m.c, what = `${m.fn}(): no ${q === 0 ? 'bubble' : 'dew'} ${solveT ? 'temperature' : 'pressure'} found for ${c.key} at ${solveT ? `P = ${+P.toPrecision(6)} Pa` : `T = ${+T.toPrecision(6)} K`}`;
+        if (solveT) { try { T = Mixtures.root((t) => Mixtures.rrWilson(c, t, P, z, q), 300, 20, 30, 3000, ''); } catch (e) { T = 300; } }
+        else { try { P = Math.exp(Mixtures.root((u) => Mixtures.rrWilson(c, T, Math.exp(u), z, q), Math.log(1e5), 1, Math.log(1e-2), Math.log(1e9), '')); } catch (e) { P = 1e5; } }
+        let lnK = Mixtures.wilson(c, T, P), prev = null, w = z;
+        const dW = c.names.map((n, i) => -5.373 * (1 + c.w[i]) * c.Tc[i]);   // d ln K / d(1/T), Wilson
+        for (let it = 0; it < 300; it++) {
+            const K = lnK.map(Math.exp), terms = z.map((v, i) => q === 0 ? v * K[i] : v / K[i]), S = terms.reduce((a, b) => a + b, 0);
+            w = terms.map(v => v / S);
+            const F = Math.log(S);
+            if (!Number.isFinite(F)) throw new Error(what);
+            if (solveT) {
+                let slope = (q === 0 ? 1 : -1) * w.reduce((a, v, i) => a + v * dW[i], 0);
+                if (prev && Math.abs(1 / T - prev.iT) > 1e-15 && (F - prev.F) * slope > 0) slope = (F - prev.F) / (1 / T - prev.iT);
+                prev = { iT: 1 / T, F };
+                let Tn = 1 / (1 / T - F / slope);
+                if (!(Tn > 0)) Tn = T * 1.1;
+                T = Math.min(Math.max(Tn, T - 20, 30), T + 20, 3000);
+            } else P = q === 0 ? P * S : P / S;
+            let next;
+            try { next = Mixtures.lnK(m, T, P, q === 0 ? z : w, q === 0 ? w : z); } catch (e) { if (it === 0) throw e; throw new Error(what); }
+            const d = Math.max(...next.map((v, i) => Math.abs(v - lnK[i])));
+            lnK = next;
+            if (Math.abs(F) < 1e-9 && d < 1e-9) break;
+            if (it === 299) throw new Error(what);
+        }
+        if (Math.max(...lnK.map(Math.abs)) < 1e-4) throw new Error(`${m.fn}(): ${c.key} is at or near its critical point here; the phases cannot be told apart`);
+        return { T, P, x: q === 0 ? z : w, y: q === 0 ? w : z, lnK };
+    }
+    // Saturation (0 <= q <= 1, z fixed): the temperature at P, or the pressure at T
+    static satT(m, P, z, q) {
+        if (!m.ideal && (q === 0 || q === 1)) return Mixtures.satReal(m, z, q, null, P, true);
+        const c = m.c, what = `${m.fn}(): no ${q === 0 ? 'bubble' : q === 1 ? 'dew' : 'saturation'} temperature found for ${c.key} at P = ${+P.toPrecision(6)} Pa`;
+        if (m.ideal) {
+            const lo = Math.max(...c.Tmin), hi = Math.min(...c.Tc) * (1 - 1e-9), f = (T) => Mixtures.split(m, T, P, z, q).g, flo = f(lo), fhi = f(hi);
+            if (!(flo * fhi < 0)) throw new Error(`${what} between ${+lo.toPrecision(6)} and ${+hi.toPrecision(6)} K, where the vapor pressures of all the fluids are known`);
+            const T = Mixtures.bracketed(f, lo, hi, flo, fhi);
+            return { T, ...Mixtures.split(m, T, P, z, q) };
+        }
+        let T0 = 300;
+        try { T0 = Mixtures.root((T) => Mixtures.rrWilson(c, T, P, z, q), 300, 20, 30, 3000, ''); } catch (e) { }
+        let last = null;
+        const g = (T) => { const s = Mixtures.split(m, T, P, z, q, last); last = s.lnK; return s.g; };
+        const T = Mixtures.root(g, T0, 2, 30, 3000, what);
+        return { T, ...Mixtures.split(m, T, P, z, q, last) };
+    }
+    static satP(m, T, z, q) {
+        if (!m.ideal && (q === 0 || q === 1)) return Mixtures.satReal(m, z, q, T, null, false);
+        const c = m.c, what = `${m.fn}(): no ${q === 0 ? 'bubble' : q === 1 ? 'dew' : 'saturation'} pressure found for ${c.key} at T = ${+T.toPrecision(6)} K`;
+        if (m.ideal) {   // K = Psat/P: the bubble and dew pressures are explicit; between them, the Rachford-Rice residual in ln P
+            const ps = c.names.map((n, i) => Mixtures.psat(c, i, T, m.fn));
+            const Pb = z.reduce((s, v, i) => s + v * ps[i], 0), Pd = 1 / z.reduce((s, v, i) => s + v / ps[i], 0);
+            let P = q === 0 ? Pb : q === 1 ? Pd : null;
+            if (P === null) { const f = (u) => Mixtures.split(m, T, Math.exp(u), z, q).g, a = Math.log(Pd), b = Math.log(Pb); P = Math.exp(Mixtures.bracketed(f, a, b, f(a), f(b))); }
+            return { P, ...Mixtures.split(m, T, P, z, q) };
+        }
+        let u0 = Math.log(1e5);
+        try { u0 = Mixtures.root((u) => Mixtures.rrWilson(c, T, Math.exp(u), z, q), Math.log(1e5), 1, Math.log(1e-2), Math.log(1e9), ''); } catch (e) { }
+        let last = null;
+        const g = (u) => { const s = Mixtures.split(m, T, Math.exp(u), z, q, last); last = s.lnK; return s.g; };
+        const P = Math.exp(Mixtures.root(g, u0, 0.2, Math.log(1e-2), Math.log(1e9), what));
+        return { P, ...Mixtures.split(m, T, P, z, q, last) };
+    }
+    // Properties of a phase (molar)
+    static phase(m, comp, T, P, liquid) {
+        const c = m.c, CP = ThermoEngine.CP, R = Mixtures.R;
+        if (!m.ideal) return Mixtures.phaseReal(c, comp, T, P, liquid, m.fn);
+        let h = 0, s = 0, v = 0;
+        comp.forEach((xi, i) => {
+            if (!(xi > 0)) return;
+            const n = c.names[i];
+            if (liquid) {
+                Mixtures.psat(c, i, T, m.fn);
+                h += xi * CP.PropsSI('Hmolar', 'T', T, 'Q', 0, n); s += xi * (CP.PropsSI('Smolar', 'T', T, 'Q', 0, n) - R * Math.log(xi)); v += xi / CP.PropsSI('Dmolar', 'T', T, 'Q', 0, n);
+            } else {
+                const tk = T < c.Tc[i] ? 'T|gas' : 'T', pi = xi * P;
+                h += xi * CP.PropsSI('Hmolar', tk, T, 'P', pi, n); s += xi * CP.PropsSI('Smolar', tk, T, 'P', pi, n);
+            }
+        });
+        if (!liquid) v = R * T / P;
+        if (![h, s, v].every(Number.isFinite)) ThermoEngine.fail(CP, `${m.fn}() ${liquid ? 'liquid' : 'vapor'} of ${c.key} at T = ${T} K, P = ${P} Pa`);
+        return { h, s, v };
+    }
+    static result(m, T, P, z, q, x, y) {   // q: molar vapor fraction; -0.001 / 1.001 in one phase
+        const c = m.c, qq = Math.min(Math.max(q, 0), 1);
+        const L = qq < 1 ? Mixtures.phase(m, x, T, P, true) : null, V = qq > 0 ? Mixtures.phase(m, y, T, P, false) : null;
+        const mix = (k) => (L ? (1 - qq) * L[k] : 0) + (V ? qq * V[k] : 0), M = z.reduce((s, v, i) => s + v * c.M[i], 0);
+        const h = mix('h') / M, v = mix('v') / M;
+        return { T, P, q, z, x, y, M, h, s: mix('s') / M, v, u: h - P * v };
+    }
+    static stateTPz(m, T, P, z) {
+        const c = m.c, rrq = (K) => {   // the vapor fraction of the Rachford-Rice equation, limited to 0..1
+            const rr = (v) => z.reduce((s, zi, i) => s + zi * (K[i] - 1) / (1 + v * (K[i] - 1)), 0), r0 = rr(0), r1 = rr(1);
+            return r0 <= 0 ? 0 : r1 >= 0 ? 1 : Mixtures.bracketed(rr, 0, 1, r0, r1);
+        };
+        let lnK = m.ideal ? Mixtures.lnK(m, T, P, z, z) : Mixtures.wilson(c, T, P), q = 0, x = z, y = z;
+        // ideal: K is fixed, so the Rachford-Rice equation decides at once. Real: successive substitution from Wilson's K-values;
+        // where it settles at q = 0 or 1 the mixture is one phase, and so it is when the trial vapor (at q = 0) or the trial
+        // liquid (at q = 1) cannot exist at T, P
+        for (let it = 0; it < 500; it++) {
+            const K = lnK.map(Math.exp);
+            q = rrq(K);
+            x = Mixtures.norm(z.map((v, i) => v / (1 + q * (K[i] - 1)))); y = Mixtures.norm(x.map((v, i) => v * K[i]));
+            if (m.ideal) break;
+            let next;
+            try { next = Mixtures.lnK(m, T, P, x, y); } catch (e) { if (q === 0 || q === 1) break; throw e; }
+            const d = Math.max(...next.map((v, i) => Math.abs(v - lnK[i])));
+            lnK = next;
+            if (d < 1e-9) break;
+            if (it === 499) throw new Error(`${m.fn}(): the phase equilibrium of ${c.key} did not converge at T = ${T} K, P = ${P} Pa (near the critical region of the mixture?)`);
+        }
+        if (q > 0 && q < 1 && Math.max(...lnK.map(Math.abs)) > 1e-4) return Mixtures.result(m, T, P, z, q, x, y);
+        return Mixtures.result(m, T, P, z, q >= 1 ? 1.001 : -0.001, z, z);
+    }
+    // Two-phase states with 0 < q < 1 given: the temperature (at P) or the pressure (at T) between the bubble and dew points
+    // where the flash gives q (q rises with T and falls with P)
+    static satMid(m, z, q, T, P) {
+        if (T === null) {
+            const Tb = Mixtures.satT(m, P, z, 0).T, Td = Mixtures.satT(m, P, z, 1).T, f = (t) => Mixtures.stateTPz(m, t, P, z).q - q;
+            const lo = Math.min(Tb, Td), hi = Math.max(Tb, Td);
+            const t = hi - lo < 1e-9 ? lo : Mixtures.bracketed((t) => { const v = Mixtures.stateTPz(m, t, P, z).q; return Math.min(Math.max(v, 0), 1) - q; }, lo, hi, -q, 1 - q, 1e-10);
+            const st = Mixtures.stateTPz(m, t, P, z);
+            return Mixtures.result(m, t, P, z, q, st.x, st.y);
+        }
+        const Pb = Mixtures.satP(m, T, z, 0).P, Pd = Mixtures.satP(m, T, z, 1).P, lo = Math.log(Math.min(Pb, Pd)), hi = Math.log(Math.max(Pb, Pd));
+        const u = hi - lo < 1e-12 ? lo : Mixtures.bracketed((u) => { const v = Mixtures.stateTPz(m, T, Math.exp(u), z).q; return Math.min(Math.max(v, 0), 1) - q; }, lo, hi, 1 - q, -q, 1e-10);
+        const st = Mixtures.stateTPz(m, T, Math.exp(u), z);
+        return Mixtures.result(m, T, Math.exp(u), z, q, st.x, st.y);
+    }
+    // inputs and outputs, as nh3h2o()
+    static evaluate(name, a) {
+        const fn = name, num = (v, k) => ThermoEngine.num(v, `${fn}() value for '${k}'`);
+        if (a.length !== 8) throw new Error(`${fn}(): use ${fn}('output', 'fluid1&fluid2', 'key1', v1, 'key2', v2, 'key3', v3), keys T, P, x, q or h`);
+        const c = Mixtures.info(a[1], fn), m = { c, ideal: name === 'idealmixture', fn };
+        if (!m.ideal) Mixtures.real(c, fn);
+        const o = String(a[0]).trim().toLowerCase(), om = /^(x|xl|yv)(\d+)$/.exec(o);
+        if (!(['t', 'p', 'x', 'h', 's', 'u', 'v', 'q', 'xl', 'yv', 'm'].includes(o) && !(c.n > 2 && ['x', 'xl', 'yv'].includes(o))) && !(om && +om[2] >= 1 && +om[2] <= c.n))
+            throw new Error(`${fn}(): unknown output '${a[0]}'; use T, P, q, h, s, u, v, M, ${c.n === 2 ? 'x, xl, yv (of the first fluid) or ' : ''}x1, xl1, yv1 ... x${c.n}, xl${c.n}, yv${c.n}`);
+        const inp = {};
+        for (let i = 2; i < 8; i += 2) {
+            const k = String(a[i]).trim().toLowerCase();
+            if (!['t', 'p', 'x', 'q', 'h'].includes(k)) throw new Error(`${fn}(): unknown input '${a[i]}'; the inputs are T, P, x, q and h`);
+            if (k in inp) throw new Error(`${fn}(): input '${a[i]}' is given twice`);
+            if (k === 'x') {
+                let z = a[i + 1];
+                if (z && typeof z === 'object') z = (typeof z.toArray === 'function' ? z.toArray() : z).flat(Infinity).map(v => num(v, 'x'));
+                else { z = num(z, 'x'); if (c.n !== 2) throw new Error(`${fn}(): with ${c.n} fluids, give x as an array of their ${c.n} mole fractions, [x1, ..., x${c.n}]`); z = [z, 1 - z]; }
+                if (z.length !== c.n) throw new Error(`${fn}(): x has ${z.length} mole fractions for ${c.n} fluids`);
+                if (!z.every(v => v >= 0 && v <= 1)) throw new Error(`${fn}(): the mole fractions must be between 0 and 1, not ${z.join(', ')}`);
+                const sum = z.reduce((s, v) => s + v, 0);
+                if (Math.abs(sum - 1) > 1e-6) throw new Error(`${fn}(): the mole fractions add up to ${+sum.toPrecision(8)}, not 1`);
+                inp.x = z.map(v => v / sum);
+            } else inp[k] = num(a[i + 1], a[i]);
+        }
+        const has = (...ks) => ks.every(k => k in inp);
+        if ('q' in inp && !(inp.q >= 0 && inp.q <= 1)) throw new Error(`${fn}(): q = ${inp.q} must be a molar vapor fraction from 0 to 1 (a saturated or two-phase state)`);
+        if ('t' in inp && !(inp.t > 0)) throw new Error(`${fn}(): T = ${inp.t} K must be positive`);
+        if ('p' in inp && !(inp.p > 0)) throw new Error(`${fn}(): P = ${inp.p} Pa must be positive`);
+        const ck = `${fn}|${c.key}|${JSON.stringify(inp)}`;
+        let st = Mixtures.states.get(ck);
+        if (st) { Mixtures.states.delete(ck); Mixtures.states.set(ck, st); }   // most recent last
+        else if (has('t', 'p', 'x')) st = Mixtures.stateTPz(m, inp.t, inp.p, inp.x);
+        else if (has('p', 'x', 'q') && inp.q > 0 && inp.q < 1) st = Mixtures.satMid(m, inp.x, inp.q, null, inp.p);
+        else if (has('t', 'x', 'q') && inp.q > 0 && inp.q < 1) st = Mixtures.satMid(m, inp.x, inp.q, inp.t, null);
+        else if (has('p', 'x', 'q')) { const s = Mixtures.satT(m, inp.p, inp.x, inp.q); st = Mixtures.result(m, s.T, inp.p, inp.x, inp.q, s.x, s.y); }
+        else if (has('t', 'x', 'q')) { const s = Mixtures.satP(m, inp.t, inp.x, inp.q); st = Mixtures.result(m, inp.t, s.P, inp.x, inp.q, s.x, s.y); }
+        else if (has('t', 'p', 'q')) {
+            if (c.n !== 2) throw new Error(`${fn}(): T, P and q fix the phases only for two fluids; give x as well`);
+            if (inp.q !== 0 && inp.q !== 1) throw new Error(`${fn}(): with T, P and q, q must be 0 (the saturated liquid) or 1 (the saturated vapor); give x as well for other states`);
+            // two fluids at T, P: the compositions of the phases, x1 = (1 - K2)/(K1 - K2), y1 = K1 x1
+            const T = inp.t, P = inp.p, none = `${fn}(): at T = ${T} K, P = ${P} Pa there are no two phases of ${c.key} in equilibrium`;
+            let lnK = m.ideal ? Mixtures.lnK(m, T, P, [0.5, 0.5], [0.5, 0.5]) : Mixtures.wilson(c, T, P), x, y;
+            for (let it = 0; it < 300; it++) {
+                const K = lnK.map(Math.exp), x1 = (1 - K[1]) / (K[0] - K[1]);
+                if (!(x1 > -1e-9 && x1 < 1 + 1e-9 && K[0] * x1 < 1 + 1e-9)) throw new Error(none);
+                x = [Math.min(Math.max(x1, 0), 1)]; x.push(1 - x[0]); y = Mixtures.norm([K[0] * x[0], K[1] * x[1]]);
+                if (m.ideal) break;
+                const next = Mixtures.lnK(m, T, P, x, y), d = Math.max(...next.map((v, i) => Math.abs(v - lnK[i])));
+                lnK = next;
+                if (d < 1e-9) break;
+            }
+            if (!m.ideal && Math.abs(x[0] - y[0]) < 1e-6) throw new Error(none);
+            st = Mixtures.result(m, inp.t, inp.p, inp.q === 0 ? x : y, inp.q, x, y);
+        } else if (has('p', 'x', 'h')) {
+            const b = Mixtures.satT(m, inp.p, inp.x, 0).T, f = (T) => Mixtures.stateTPz(m, T, inp.p, inp.x).h - inp.h;   // h rises with T at fixed P and x
+            st = Mixtures.stateTPz(m, Mixtures.root(f, b, 10, m.ideal ? Math.max(...c.Tmin) : 50, m.ideal ? Math.min(...c.Tc) : 2000, `${fn}(): no temperature gives h = ${inp.h} J/kg at this P and x`), inp.p, inp.x);
+        } else throw new Error(`${fn}(): the inputs must be T, P, x or P, x, q or T, x, q or T, P, q or P, x, h`);
+        if (!Mixtures.states.has(ck)) { Mixtures.states.set(ck, st); if (Mixtures.states.size > 500) Mixtures.states.delete(Mixtures.states.keys().next().value); }
+        const pick = (arr, k) => arr[k];
+        if (om) { const k = +om[2] - 1; return pick(om[1] === 'x' ? st.z : om[1] === 'xl' ? st.x : st.y, k); }
+        if (o === 'x') return st.z[0];
+        if (o === 'xl') return st.x[0];
+        if (o === 'yv') return st.y[0];
+        return { t: st.T, p: st.P, h: st.h, s: st.s, u: st.u, v: st.v, q: st.q, m: st.M }[o];
+    }
+    // molefraction('a&b', w) and massfraction('a&b', x): the fraction of the first fluid; for more fluids, an array and the
+    // index of the fluid wanted
+    static convert(name, a) {
+        const toMass = name === 'massfraction', fn = name;
+        if (a.length !== 2 && a.length !== 3) throw new Error(`${fn}(): use ${fn}('fluid1&fluid2', ${toMass ? 'x' : 'w'}) for the first fluid, or ${fn}('fluid1&fluid2&fluid3', [..., ..., ...], i) for fluid i`);
+        const c = Mixtures.info(a[0], fn);
+        let f = a[1], i = 0;
+        if (f && typeof f === 'object') f = (typeof f.toArray === 'function' ? f.toArray() : f).flat(Infinity).map(v => ThermoEngine.num(v, `${fn}() fraction`));
+        else { f = ThermoEngine.num(f, `${fn}() fraction`); if (c.n !== 2) throw new Error(`${fn}(): with ${c.n} fluids, give an array of ${c.n} fractions and the index of the fluid wanted`); f = [f, 1 - f]; }
+        if (f.length !== c.n) throw new Error(`${fn}(): ${f.length} fractions for ${c.n} fluids`);
+        if (a.length === 3) { i = ThermoEngine.num(a[2], `${fn}() index`) - 1; if (!(Number.isInteger(i) && i >= 0 && i < c.n)) throw new Error(`${fn}(): the index must be 1 to ${c.n}`); }
+        else if (c.n !== 2) throw new Error(`${fn}(): give the index of the fluid wanted, 1 to ${c.n}`);
+        const wts = f.map((v, k) => toMass ? v * c.M[k] : v / c.M[k]), s = wts.reduce((p, v) => p + v, 0);
+        return wts[i] / s;
+    }
+}
+
+// Solutions of a nonvolatile solute (a salt, a sugar, a glycol) in a liquid solvent, as an ideal solution: the solvent's
+// activity is its mole fraction counting every particle of the solute,
+//     a = n_solvent/(n_solvent + nu n_solute)
+// with nu the ions per formula unit of a salt taken as fully dissociated (2 for NaCl, 3 for CaCl2) and 1 for a molecular solute.
+// The solvent in the solution has the Gibbs energy of the pure liquid plus (R/M) T ln a, so each property is where it equals
+// that of the other phase of pure solvent (through CoolProp, liquid and vapor imposed, so slightly metastable states are used):
+//     vapor pressure P at T, and boiling point T at P:  g_vapor(T, P) = g_liquid(T, P) + (R/M) T ln a
+//     osmotic pressure Pi:                              g_liquid(T, P + Pi) = g_liquid(T, P) - (R/M) T ln a
+//     freezing point (water):                           g_ice(T, P) = g_liquid(T, P) + (R/M) T ln a
+// (ice Ih of IAPWS R10-06, above; liquid water of IAPWS-95, supercooled below 273.16 K). In dilute solutions these become
+// Raoult's law, the ebullioscopic and cryoscopic constants R T^2 M/Dh and van 't Hoff's law, without taking the vapor as an
+// ideal gas. The solutes listed
+// have molar masses from their formulas and the standard atomic weights (IUPAC 2021, abridged values); any other solute can be
+// given by its molar mass M and nu.
+class Solutions {
+    static AW = { H: 1.008, Li: 6.94, C: 12.011, N: 14.007, O: 15.999, Na: 22.990, Mg: 24.305, S: 32.06, Cl: 35.45, K: 39.098, Ca: 40.078 };
+    static LIST = [['NaCl', 2, 'sodium chloride'], ['KCl', 2, 'potassium chloride'], ['CaCl2', 3, 'calcium chloride'], ['MgCl2', 3, 'magnesium chloride'],
+        ['LiCl', 2, 'lithium chloride'], ['Na2SO4', 3, 'sodium sulfate'], ['Na2CO3', 3, 'sodium carbonate'], ['NaOH', 2, 'sodium hydroxide'], ['KOH', 2, 'potassium hydroxide'],
+        ['NH4NO3', 2, 'ammonium nitrate'], ['C12H22O11', 1, 'sucrose'], ['C6H12O6', 1, 'glucose'], ['CH4N2O', 1, 'urea'], ['C2H6O2', 1, 'ethylene glycol'],
+        ['C3H8O2', 1, 'propylene glycol'], ['C3H8O3', 1, 'glycerol']];
+    static molar(formula) { let M = 0; for (const [, el, n] of formula.matchAll(/([A-Z][a-z]?)(\d*)/g)) M += Solutions.AW[el] * (n ? +n : 1); return M / 1000; }
+    static solute(name) {
+        const k = String(name).trim().toLowerCase().replace(/[\s_-]+/g, '');
+        const e = Solutions.LIST.find(([f, nu, nm]) => f.toLowerCase() === k || nm.replace(/\s+/g, '') === k);
+        return e ? { name: e[0], M: Solutions.molar(e[0]), nu: e[1] } : null;
+    }
+    static evaluate(a) {
+        const fn = 'solution', CP = ThermoEngine.CP;
+        if (a.length < 4 || a.length % 2 !== 0) throw new Error("solution(): use solution('output', 'NaCl&water', 'key1', v1, 'key2', v2), keys T or P and w or m");
+        const o = String(a[0]).trim().toLowerCase(), OUT = ['p', 't', 'dt', 'tf', 'dtf', 'pi', 'aw', 'm', 'w'];
+        if (!OUT.includes(o)) throw new Error(`solution(): unknown output '${a[0]}'; use P, T, dT, Tf, dTf, Pi, aw, m or w`);
+        const parts = String(a[1]).split('&').map(s => s.trim());
+        const inp = {};
+        for (let i = 2; i < a.length; i += 2) {
+            const k = String(a[i]).trim();
+            const kk = k === 'M' ? 'M' : k.toLowerCase();
+            if (!['t', 'p', 'w', 'm', 'M', 'nu'].includes(kk)) throw new Error(`solution(): unknown input '${a[i]}'; the inputs are T, P, w (the solute mass fraction) or m (the molality, mol/kg), and M and nu for a solute not listed`);
+            if (kk in inp) throw new Error(`solution(): input '${a[i]}' is given twice`);
+            inp[kk] = ThermoEngine.num(a[i + 1], `solution() value for '${k}'`);
+        }
+        let sol, solvent;
+        if (parts.length === 2) {
+            sol = Solutions.solute(parts[0]); solvent = parts[1];
+            if (!sol) throw new Error(`solution(): '${parts[0]}' is not one of the solutes listed (see Solutions in Help); give any other by its molar mass and ions, as solution('${a[0]}', '${parts[1]}', ..., 'M', 0.1, 'nu', 1)`);
+            if ('M' in inp || 'nu' in inp) throw new Error(`solution(): M and nu are known for ${sol.name}; give them only for a solute not listed, naming the solvent alone`);
+        } else if (parts.length === 1) {
+            solvent = parts[0];
+            if (!('M' in inp && 'nu' in inp)) throw new Error("solution(): name the solute and the solvent, as 'NaCl&water', or give the solvent alone with the solute's molar mass M (kg/mol) and its particles per formula unit nu");
+            if (!(inp.M > 0) || !(Number.isInteger(inp.nu) && inp.nu >= 1)) throw new Error('solution(): M must be positive (kg/mol) and nu a whole number of 1 or more');
+            sol = { name: 'the solute', M: inp.M, nu: inp.nu };
+        } else throw new Error("solution(): name one solute and one solvent, as 'NaCl&water'");
+        let sv = '';
+        try { sv = CP.get_fluid_param_string(solvent, 'name'); } catch (e) { }
+        if (!sv) throw new Error(`solution(): '${solvent}' is not a CoolProp fluid`);
+        const Ms = CP.Props1SI(sv, 'M');
+        if (('w' in inp) === ('m' in inp)) throw new Error('solution(): give the composition once, as w (the solute mass fraction) or m (the molality, mol per kg of solvent)');
+        if ('w' in inp && !(inp.w >= 0 && inp.w < 1)) throw new Error(`solution(): w = ${inp.w} must be a mass fraction from 0 to less than 1`);
+        if ('m' in inp && !(inp.m >= 0)) throw new Error(`solution(): m = ${inp.m} mol/kg cannot be negative`);
+        const m = 'm' in inp ? inp.m : inp.w / (sol.M * (1 - inp.w)), w = 'w' in inp ? inp.w : m * sol.M / (1 + m * sol.M);
+        const aw = (1 / Ms) / (1 / Ms + sol.nu * m);
+        if (o === 'aw') return aw;
+        if (o === 'm') return m;
+        if (o === 'w') return w;
+        const need = (k, what) => { if (!(k in inp)) throw new Error(`solution(): ${what} needs ${k === 't' ? 'T' : 'P'}`); return inp[k]; };
+        const Tt = CP.Props1SI(sv, 'Ttriple'), Tc = CP.Props1SI(sv, 'Tcrit'), Pc = CP.Props1SI(sv, 'pcrit');
+        const Rs = Mixtures.R / Ms, lna = Math.log(aw);
+        const gL = (T, P) => CP.PropsSI('Gmass', 'T|liquid', T, 'P', P, sv), gV = (T, P) => CP.PropsSI('Gmass', 'T|gas', T, 'P', P, sv);
+        const bisect = (f, lo, hi) => { let flo = f(lo); for (let k = 0; k < 200 && hi - lo > 1e-13 * Math.abs(hi); k++) { const mid = (lo + hi) / 2, fm = f(mid); if ((fm < 0) === (flo < 0)) { lo = mid; flo = fm; } else hi = mid; } return (lo + hi) / 2; };
+        if (o === 'p' || o === 'pi') {
+            const T = need('t', o === 'p' ? 'the vapor pressure' : 'the osmotic pressure');
+            if (!(T >= Tt && T < Tc)) throw new Error(`solution(): T = ${T} K is outside the liquid range of ${sv}, ${+Tt.toPrecision(6)} to ${+Tc.toPrecision(6)} K`);
+            const Psat = CP.PropsSI('P', 'T', T, 'Q', 0, sv);
+            if (aw === 1) return o === 'p' ? Psat : 0;
+            if (o === 'p') { const f = (u) => gV(T, Math.exp(u)) - gL(T, Math.exp(u)) - Rs * T * lna; return Math.exp(bisect(f, Math.log(0.5 * aw * Psat), Math.log(Psat))); }
+            const P = Math.max('p' in inp ? inp.p : 101325, Psat), g0 = gL(T, P), est = -Rs * T * lna / (1 / CP.PropsSI('D', 'T|liquid', T, 'P', P, sv));
+            const f = (Pi) => gL(T, P + Pi) - g0 + Rs * T * lna;
+            let hi = 2 * est; while (f(hi) < 0 && hi < 1e10) hi *= 2;
+            return bisect(f, 0, hi);
+        }
+        const P = o === 'tf' || o === 'dtf' ? ('p' in inp ? inp.p : 101325) : need('p', 'the boiling point');
+        if (o === 't' || o === 'dt') {
+            const Pt = CP.Props1SI(sv, 'ptriple');
+            if (!(P >= Pt && P < Pc)) throw new Error(`solution(): P = ${P} Pa is outside the boiling range of ${sv}, ${+Pt.toPrecision(6)} to ${+Pc.toPrecision(6)} Pa`);
+            const T0 = CP.PropsSI('T', 'P', P, 'Q', 0, sv);
+            if (aw === 1) return o === 't' ? T0 : 0;
+            const f = (T) => gV(T, P) - gL(T, P) - Rs * T * lna;   // positive at T0, falling with T
+            let hi = P / aw < Pc ? CP.PropsSI('T', 'P', P / aw, 'Q', 0, sv) + 1 : Tc;
+            if (!(f(hi) < 0)) throw new Error(`solution(): no boiling point of this solution of ${sv} found at P = ${P} Pa below ${+hi.toPrecision(6)} K`);
+            const T = bisect(f, T0, hi);
+            return o === 't' ? T : T - T0;
+        }
+        if (sv !== 'Water') throw new Error('solution(): the freezing point is available for water only (ice Ih)');
+        if (!(P >= IceIh.pt && P <= 100e6)) throw new Error(`solution(): P = ${P} Pa is outside 611.657 Pa to 100 MPa for the freezing point`);
+        const Tm = IceIh.Tmelt(P);
+        if (aw === 1) return o === 'tf' ? Tm : 0;
+        const f = (T) => IceIh.gibbs(T, P).g - gL(T, P) - Rs * T * lna;
+        const lo = 240, flo = f(lo);
+        if (!(flo < 0)) throw new Error(`solution(): the freezing point is below 240 K (-33 degC), the lowest temperature of supercooled water here; the solution is too concentrated for this ideal model`);
+        const Tf = bisect(f, lo, Tm + 0.01);
+        if (o === 'tf') return Tf;
+        // the depression from the melting point of the same two Gibbs functions (the R14-08 melting curve differs slightly)
+        return bisect((T) => IceIh.gibbs(T, P).g - gL(T, P), Tm - 0.01, Tm + 0.01) - Tf;
     }
 }
 
@@ -1044,8 +1502,15 @@ class ThermoEngine {
         // --- U.S. Standard Atmosphere 1976, -5 to 86 km ---
         atmosphere: { key: '', unit: '', kind: 'atm', desc: "U.S. Standard Atmosphere 1976 at geometric altitude z in m (-5 to 86 km): atmosphere('output', z); outputs T, P, rho, c, mu, k, nu, g, H (geopotential altitude)" },
         atmosphere_altitude: { key: '', unit: 'm', kind: 'atm', desc: "Geometric altitude of the standard atmosphere where the pressure or the density has a value: atmosphere_altitude('P', P) or ('rho', rho)" },
+        // --- mixtures of CoolProp's pure fluids, by mole fraction: see the Mixtures class ---
+        mixture: { key: '', unit: '', kind: 'mix', desc: "Mixture by CoolProp's equation of state, for fluids whose every pair has parameters in CoolProp: mixture('output', 'ethanol&water', 'key1', v1, 'key2', v2, 'key3', v3); keys T, P, x (mole fraction of the first fluid, or an array), q (molar vapor fraction), h; outputs T, P, x, q, h, s, u, v, M, xl, yv" },
+        idealmixture: { key: '', unit: '', kind: 'mix', desc: "Ideal mixture (Raoult's law) of any of CoolProp's pure fluids: idealmixture('output', 'benzene&toluene', 'key1', v1, 'key2', v2, 'key3', v3); keys and outputs as mixture()" },
+        molefraction: { key: '', unit: '', kind: 'mix', desc: "Mole fraction from mass fractions: molefraction('ethanol&water', w) for the first fluid, or molefraction('a&b&c', [w1, w2, w3], i)" },
+        massfraction: { key: '', unit: '', kind: 'mix', desc: "Mass fraction from mole fractions: massfraction('ethanol&water', x) for the first fluid, or massfraction('a&b&c', [x1, x2, x3], i)" },
+        // --- solutions of a nonvolatile solute, ideal: see the Solutions class ---
+        solution: { key: '', unit: '', kind: 'sol', desc: "Ideal solution of a nonvolatile solute: solution('output', 'NaCl&water', 'key1', v1, 'key2', v2); keys T, P, w (solute mass fraction) or m (molality); outputs P (vapor pressure), T (boiling point), dT, Tf (freezing point, water), dTf, Pi (osmotic pressure), aw, m, w" },
         // --- seawater at 1 atm (Sharqawy et al. 2010) and the ocean's pressure and depth (UNESCO 1983): see the Seawater class ---
-        seawater: { key: '', unit: '', kind: 'sea', desc: "Seawater at atmospheric pressure (Sharqawy et al. 2010): seawater('output', T, S), T 273.15 to 393.15 K, S the salinity in kg/kg (0 to 0.12); outputs rho, cp, k, mu, nu, alpha, Pr" },
+        seawater: { key: '', unit: '', kind: 'sea', desc: "Seawater at atmospheric pressure (Sharqawy et al. 2010): seawater('output', T, S), T 273.15 to 393.15 K, S the salinity in kg/kg (0 to 0.12); outputs rho, cp, k, mu, nu, alpha, Pr, BPE (boiling-point elevation)" },
         oceandepth: { key: '', unit: 'm', kind: 'sea', desc: 'Depth of the standard ocean (UNESCO 1983) at absolute pressure P (Pa) and latitude lat (rad): oceandepth(P, lat)' },
         oceanpressure: { key: '', unit: 'Pa', kind: 'sea', desc: 'Absolute pressure of the standard ocean (UNESCO 1983) at depth z (m) and latitude lat (rad): oceanpressure(z, lat)' },
         // --- general access to everything else CoolProp offers ---
@@ -1109,6 +1574,8 @@ class ThermoEngine {
         if (spec.kind === 'nh3') return NH3H2O.evaluate(a);
         if (spec.kind === 'atm') return StdAtmosphere.evaluate(name, a);
         if (spec.kind === 'sea') return Seawater.evaluate(name, a);
+        if (spec.kind === 'sol') return Solutions.evaluate(a);
+        if (spec.kind === 'mix') return (name === 'molefraction' || name === 'massfraction') ? Mixtures.convert(name, a) : Mixtures.evaluate(name, a);
         if (spec.kind === 'exergy') {   // physical exergy relative to the same fluid at T0, P0, through the property functions above
             if (a.length !== 5 && a.length !== 7) throw new Error(`${name}(): use ${name}(fluid, T, P, T0, P0) or ${name}(fluid, 'key1', v1, 'key2', v2, T0, P0)`);
             const T0 = ThermoEngine.num(a[a.length - 2], `${name}() T0`), P0 = ThermoEngine.num(a[a.length - 1], `${name}() P0`);
