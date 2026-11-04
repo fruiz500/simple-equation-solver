@@ -393,8 +393,9 @@ const CORRELATIONS = (() => {
         if (D < 0 && D > -1e-12 * Mo * Mo) D = 0;   // at the choking point, within rounding
         if (D < 0) throw new Error(`${fn}(): no solution: the particles choke the flow (M2 = 1 at ms = ${+choke.toPrecision(5)})`);
         const us = [-1, 1].map(sg => (Mo + sg * Math.sqrt(D)) / (2 * ab));
-        const st = us.map(u => { const th = E - a * u * u; return { u, th, M2: u * M1 * Math.sqrt((1 + ms) / th) }; });
-        const r = st.find(x => sup ? x.M2 >= 1 : x.M2 <= 1) || st[sup ? 1 : 0];
+        const st = us.map(u => { const th = E - a * u * u; return { u, th, M2: u * M1 * Math.sqrt((1 + ms) / th) }; }).filter(x => x.th > 0);
+        const r = st.find(x => sup ? x.M2 >= 1 - 1e-9 : x.M2 <= 1 + 1e-9);
+        if (!r) throw new Error(`${fn}(): there is no ${sup ? 'supersonic' : 'subsonic'} solution here` + (sup ? `: the subsonic one has M2 below ${+Math.sqrt((k - 1) / (2 * k)).toPrecision(4)}, the lowest Mach number a normal shock leaves behind, so its supersonic conjugate would need a negative temperature` : ''));
         const ds = k / (k - 1) * Math.log(r.th) - Math.log(r.th / r.u);
         if (ds < -1e-12 && Interp.notes && !quiet) Corr.warn(fn, `the ${sup ? 'supersonic' : 'subsonic'} solution lowers the entropy of the gas (ds/R = ${+ds.toPrecision(4)}): impossible in adiabatic flow`);
         const res = { m2: r.M2, 'v2/v1': r.u, 't2/t1': r.th, 'p2/p1': r.th / r.u, 'rho2/rho1': 1 / r.u, 'ds/r': ds };
