@@ -1040,7 +1040,7 @@ class Mixtures {
     // ln K_i at T, P for liquid x and vapor y
     static lnK(m, T, P, x, y) {
         const c = m.c;
-        if (m.ideal) return c.names.map((n, i) => Math.log(Mixtures.psat(c, i, T, m.fn) / P));
+        if (!m.real) { const g = m.gamma ? Mixtures.lnGamma(m.gamma, x, m.fn) : null; return c.names.map((n, i) => Math.log(Mixtures.psat(c, i, T, m.fn) / P) + (g ? g[i] : 0)); }
         const L = Mixtures.phaseReal(c, x, T, P, true, m.fn), V = Mixtures.phaseReal(c, y, T, P, false, m.fn);
         return L.lnphi.map((l, i) => l - V.lnphi[i]);
     }
@@ -1049,7 +1049,7 @@ class Mixtures {
     // The compositions of the phases and the Rachford-Rice residual at T, P for overall z and vapor fraction q, with the
     // compositions converged by successive substitution from lnK0
     static split(m, T, P, z, q, lnK0) {
-        let lnK = lnK0 || (m.ideal ? Mixtures.lnK(m, T, P, z, z) : Mixtures.wilson(m.c, T, P)), x, y;
+        let lnK = lnK0 || (m.real ? Mixtures.wilson(m.c, T, P) : Mixtures.lnK(m, T, P, z, z)), x, y;
         for (let it = 0; it < 300; it++) {
             const K = lnK.map(Math.exp);
             x = Mixtures.norm(z.map((v, i) => v / (1 + q * (K[i] - 1))));
@@ -1103,9 +1103,12 @@ class Mixtures {
     // slope of Wilson's K-values
     static satReal(m, z, q, T, P, solveT) {
         const c = m.c, what = `${m.fn}(): no ${q === 0 ? 'bubble' : 'dew'} ${solveT ? 'temperature' : 'pressure'} found for ${c.key} at ${solveT ? `P = ${+P.toPrecision(6)} Pa` : `T = ${+T.toPrecision(6)} K`}`;
-        if (solveT) { try { T = Mixtures.root((t) => Mixtures.rrWilson(c, t, P, z, q), 300, 20, 30, 3000, ''); } catch (e) { T = 300; } }
+        if (m.gamma) {   // activity coefficients: start from Raoult's law
+            const ideal = { ...m, ideal: true, gamma: null }, s0 = solveT ? Mixtures.satT(ideal, P, z, q) : Mixtures.satP(ideal, T, z, q);
+            if (solveT) T = s0.T; else P = s0.P;
+        } else if (solveT) { try { T = Mixtures.root((t) => Mixtures.rrWilson(c, t, P, z, q), 300, 20, 30, 3000, ''); } catch (e) { T = 300; } }
         else { try { P = Math.exp(Mixtures.root((u) => Mixtures.rrWilson(c, T, Math.exp(u), z, q), Math.log(1e5), 1, Math.log(1e-2), Math.log(1e9), '')); } catch (e) { P = 1e5; } }
-        let lnK = Mixtures.wilson(c, T, P), prev = null, w = z;
+        let lnK = m.gamma ? Mixtures.lnK(m, T, P, z, z) : Mixtures.wilson(c, T, P), prev = null, w = z;
         const dW = c.names.map((n, i) => -5.373 * (1 + c.w[i]) * c.Tc[i]);   // d ln K / d(1/T), Wilson
         for (let it = 0; it < 300; it++) {
             const K = lnK.map(Math.exp), terms = z.map((v, i) => q === 0 ? v * K[i] : v / K[i]), S = terms.reduce((a, b) => a + b, 0);
@@ -1167,7 +1170,7 @@ class Mixtures {
     // Properties of a phase (molar)
     static phase(m, comp, T, P, liquid) {
         const c = m.c, CP = ThermoEngine.CP, R = Mixtures.R;
-        if (!m.ideal) return Mixtures.phaseReal(c, comp, T, P, liquid, m.fn);
+        if (m.real) return Mixtures.phaseReal(c, comp, T, P, liquid, m.fn);
         let h = 0, s = 0, v = 0;
         comp.forEach((xi, i) => {
             if (!(xi > 0)) return;
@@ -1181,6 +1184,7 @@ class Mixtures {
             }
         });
         if (!liquid) v = R * T / P;
+        else if (m.gamma) { const g = Mixtures.lnGamma(m.gamma, comp, m.fn); s -= R * comp.reduce((a, xi, i) => a + (xi > 0 ? xi * g[i] : 0), 0); }   // sE = -gE/T
         if (![h, s, v].every(Number.isFinite)) ThermoEngine.fail(CP, `${m.fn}() ${liquid ? 'liquid' : 'vapor'} of ${c.key} at T = ${T} K, P = ${P} Pa`);
         return { h, s, v };
     }
@@ -1196,7 +1200,7 @@ class Mixtures {
             const rr = (v) => z.reduce((s, zi, i) => s + zi * (K[i] - 1) / (1 + v * (K[i] - 1)), 0), r0 = rr(0), r1 = rr(1);
             return r0 <= 0 ? 0 : r1 >= 0 ? 1 : Mixtures.bracketed(rr, 0, 1, r0, r1);
         };
-        let lnK = m.ideal ? Mixtures.lnK(m, T, P, z, z) : Mixtures.wilson(c, T, P), q = 0, x = z, y = z;
+        let lnK = m.real ? Mixtures.wilson(c, T, P) : Mixtures.lnK(m, T, P, z, z), q = 0, x = z, y = z;
         // ideal: K is fixed, so the Rachford-Rice equation decides at once. Real: successive substitution from Wilson's K-values;
         // where it settles at q = 0 or 1 the mixture is one phase, and so it is when the trial vapor (at q = 0) or the trial
         // liquid (at q = 1) cannot exist at T, P
@@ -1230,15 +1234,101 @@ class Mixtures {
         const st = Mixtures.stateTPz(m, T, Math.exp(u), z);
         return Mixtures.result(m, T, Math.exp(u), z, q, st.x, st.y);
     }
+    // Activity-coefficient models (gammamixture): parameters dimensionless and independent of T, as tabulated (Smith, Van Ness
+    // and Abbott, Introduction to Chemical Engineering Thermodynamics, Ch. 13). Two fluids: Margules [A12, A21], van Laar
+    // [A12, A21], Wilson [L12, L21], NRTL [t12, t21, alpha]; any number: Wilson, the n x n matrix L (L_ii = 1), and NRTL, the
+    // 2n x n matrix of the n rows of tau (tau_ii = 0) followed by the n rows of alpha
+    static gammaModel(g, n, fn) {
+        const raw = g.raw && typeof g.raw === 'object' ? (typeof g.raw.toArray === 'function' ? g.raw.toArray() : g.raw) : null;
+        if (!raw) throw new Error(`${fn}(): give the parameters of the ${g.model} model as an array, such as [1.2, 0.8]`);
+        const num = (v) => ThermoEngine.num(v, `${fn}() ${g.model} parameter`);
+        const flat = raw.flat(Infinity).map(num), mat = (rows, k) => rows.slice(k * n, (k + 1) * n);
+        const two = (len, what) => { if (n !== 2 || flat.length !== len || Array.isArray(raw[0])) throw new Error(`${fn}(): the ${g.model} model takes ${what}${n !== 2 ? ' and two fluids' : ''}`); };
+        if (g.model === 'margules' || g.model === 'vanlaar') {
+            two(2, '[A12, A21]');
+            if (g.model === 'vanlaar' && !(flat[0] * flat[1] > 0)) throw new Error(`${fn}(): the van Laar parameters A12 and A21 must be nonzero and of the same sign`);
+            return { model: g.model, A12: flat[0], A21: flat[1], key: g.model + flat.join(',') };
+        }
+        if (g.model === 'wilson') {
+            let L;
+            if (!Array.isArray(raw[0])) { two(2, '[L12, L21], or an n x n matrix'); L = [[1, flat[0]], [flat[1], 1]]; }
+            else { L = raw.map(r => r.map(num)); if (L.length !== n || L.some(r => r.length !== n)) throw new Error(`${fn}(): the Wilson matrix must be ${n} x ${n}`); }
+            if (!L.flat().every(v => v > 0)) throw new Error(`${fn}(): the Wilson parameters must be positive`);
+            return { model: 'wilson', L, key: 'wilson' + JSON.stringify(L) };
+        }
+        if (g.model === 'nrtl') {
+            let tau, alpha;
+            if (!Array.isArray(raw[0])) { two(3, '[tau12, tau21, alpha], or a 2n x n matrix (the rows of tau, then those of alpha)'); tau = [[0, flat[0]], [flat[1], 0]]; alpha = [[0, flat[2]], [flat[2], 0]]; }
+            else {
+                const rows = raw.map(r => r.map(num));
+                if (rows.length !== 2 * n || rows.some(r => r.length !== n)) throw new Error(`${fn}(): the NRTL parameters for ${n} fluids are a ${2 * n} x ${n} matrix: the ${n} rows of tau, then the ${n} rows of alpha`);
+                tau = mat(rows, 0); alpha = mat(rows, 1);
+            }
+            return { model: 'nrtl', tau, alpha, key: 'nrtl' + JSON.stringify([tau, alpha]) };
+        }
+        throw new Error(`${fn}(): unknown model '${g.model}'; use margules, vanlaar, wilson or nrtl`);
+    }
+    static lnGamma(g, x, fn) {
+        const n = x.length;
+        if (g.model === 'margules') { const [x1, x2] = x; return [x2 * x2 * (g.A12 + 2 * (g.A21 - g.A12) * x1), x1 * x1 * (g.A21 + 2 * (g.A12 - g.A21) * x2)]; }
+        if (g.model === 'vanlaar') {
+            const [x1, x2] = x, d = g.A12 * x1 + g.A21 * x2;
+            return [g.A12 * (g.A21 * x2 / d) ** 2, g.A21 * (g.A12 * x1 / d) ** 2];
+        }
+        if (g.model === 'wilson') {
+            const L = g.L, S = x.map((v, i) => x.reduce((a, xj, j) => a + xj * L[i][j], 0));
+            return x.map((v, i) => 1 - Math.log(S[i]) - x.reduce((a, xk, k) => a + xk * L[k][i] / S[k], 0));
+        }
+        const { tau, alpha } = g, G = tau.map((r, i) => r.map((t, j) => Math.exp(-alpha[i][j] * t)));
+        const D = x.map((v, j) => x.reduce((a, xk, k) => a + xk * G[k][j], 0)), Nm = x.map((v, j) => x.reduce((a, xk, k) => a + xk * tau[k][j] * G[k][j], 0));
+        return x.map((v, i) => Nm[i] / D[i] + x.reduce((a, xj, j) => a + xj * G[i][j] / D[j] * (tau[i][j] - Nm[j] / D[j]), 0));
+    }
+    // Fugacities, fugacity and activity coefficients and excess properties of the liquid of a state (outputs f1, phil1,
+    // phiv1, gamma1, hE, sE, gE, vE). Real: from CoolProp, the activity coefficient relative to the pure liquid at T, P;
+    // ideal: phi_liquid = Psat/P, the vapor an ideal gas, gamma = 1; gamma models: phi_liquid = gamma Psat/P, hE = vE = 0
+    static extra(m, st, o) {
+        const c = m.c, { T, P, x, y, q } = st, R = Mixtures.R, k = /\d+$/.test(o) ? +o.match(/\d+$/)[0] - 1 : -1;
+        const hasL = q < 1 + 1e-12, hasV = q > -1e-12;
+        const needL = () => { if (!hasL) throw new Error(`${m.fn}(): '${o}' is a property of the liquid, and this state (q = ${q}) is all vapor`); };
+        if (k >= c.n) throw new Error(`${m.fn}(): there are ${c.n} fluids, not ${k + 1}`);
+        let lnphiL = null, lnphiV = null, lng = null, hE = 0, vE = 0;
+        const pureL = (i) => { const e = c.names.map((n, j) => (j === i ? 1 : 0)); return Mixtures.phaseReal(c, e, T, P, true, m.fn); };
+        if (m.real) {
+            if (hasL) {
+                const L = Mixtures.phaseReal(c, x, T, P, true, m.fn); lnphiL = L.lnphi;
+                const pure = c.names.map((n, i) => pureL(i));
+                lng = x.map((v, i) => L.lnphi[i] - pure[i].lnphi[i]);
+                hE = L.h - x.reduce((a, xi, i) => a + xi * pure[i].h, 0); vE = L.v - x.reduce((a, xi, i) => a + xi * pure[i].v, 0);
+            }
+            if (hasV) lnphiV = Mixtures.phaseReal(c, y, T, P, false, m.fn).lnphi;
+        } else {
+            lng = m.gamma ? Mixtures.lnGamma(m.gamma, x, m.fn) : x.map(() => 0);
+            if (hasL) lnphiL = c.names.map((n, i) => Math.log(Mixtures.psat(c, i, T, m.fn) / P) + lng[i]);
+            lnphiV = c.names.map(() => 0);
+        }
+        const gE = hasL ? R * T * x.reduce((a, xi, i) => a + (xi > 0 ? xi * lng[i] : 0), 0) : 0;
+        if (o.startsWith('phil')) { needL(); return Math.exp(lnphiL[k]); }
+        if (o.startsWith('phiv')) { if (!hasV) throw new Error(`${m.fn}(): '${o}' is a property of the vapor, and this state (q = ${q}) is all liquid`); return Math.exp(lnphiV[k]); }
+        if (o.startsWith('gamma')) { needL(); return Math.exp(lng[k]); }
+        if (o.startsWith('f')) return hasL ? x[k] * Math.exp(lnphiL[k]) * P : y[k] * Math.exp(lnphiV[k]) * P;
+        needL();
+        return { he: hE, ve: vE, ge: gE, se: (hE - gE) / T }[o];
+    }
     // inputs and outputs, as nh3h2o()
     static evaluate(name, a) {
         const fn = name, num = (v, k) => ThermoEngine.num(v, `${fn}() value for '${k}'`);
+        let gamma = null;
+        if (name === 'gammamixture') {   // the model and its parameters come after the fluids
+            if (a.length !== 10) throw new Error("gammamixture(): use gammamixture('output', 'fluid1&fluid2', 'model', [parameters], 'key1', v1, 'key2', v2, 'key3', v3), model margules, vanlaar, wilson or nrtl");
+            gamma = { model: String(a[2]).trim().toLowerCase(), raw: a[3] };
+            a = [a[0], a[1], ...a.slice(4)];
+        }
         if (a.length !== 8) throw new Error(`${fn}(): use ${fn}('output', 'fluid1&fluid2', 'key1', v1, 'key2', v2, 'key3', v3), keys T, P, x, q or h`);
-        const c = Mixtures.info(a[1], fn), m = { c, ideal: name === 'idealmixture', fn };
-        if (!m.ideal) Mixtures.real(c, fn);
-        const o = String(a[0]).trim().toLowerCase(), om = /^(x|xl|yv)(\d+)$/.exec(o);
-        if (!(['t', 'p', 'x', 'h', 's', 'u', 'v', 'q', 'xl', 'yv', 'm'].includes(o) && !(c.n > 2 && ['x', 'xl', 'yv'].includes(o))) && !(om && +om[2] >= 1 && +om[2] <= c.n))
-            throw new Error(`${fn}(): unknown output '${a[0]}'; use T, P, q, h, s, u, v, M, ${c.n === 2 ? 'x, xl, yv (of the first fluid) or ' : ''}x1, xl1, yv1 ... x${c.n}, xl${c.n}, yv${c.n}`);
+        const c = Mixtures.info(a[1], fn), m = { c, ideal: name === 'idealmixture', real: name === 'mixture', gamma: gamma && Mixtures.gammaModel(gamma, c.n, fn), fn };
+        if (m.real) Mixtures.real(c, fn);
+        const o = String(a[0]).trim().toLowerCase(), om = /^(x|xl|yv)(\d+)$/.exec(o), oe = /^(f|phil|phiv|gamma)(\d+)$/.exec(o) || /^(he|se|ge|ve)$/.exec(o);
+        if (!(['t', 'p', 'x', 'h', 's', 'u', 'v', 'q', 'xl', 'yv', 'm'].includes(o) && !(c.n > 2 && ['x', 'xl', 'yv'].includes(o))) && !(om && +om[2] >= 1 && +om[2] <= c.n) && !(oe && (!oe[2] || (+oe[2] >= 1 && +oe[2] <= c.n))))
+            throw new Error(`${fn}(): unknown output '${a[0]}'; use T, P, q, h, s, u, v, M, ${c.n === 2 ? 'x, xl, yv (of the first fluid) or ' : ''}x1, xl1, yv1 ... x${c.n}, xl${c.n}, yv${c.n}; f1, phil1, phiv1, gamma1 ...; hE, sE, gE, vE`);
         const inp = {};
         for (let i = 2; i < 8; i += 2) {
             const k = String(a[i]).trim().toLowerCase();
@@ -1259,7 +1349,7 @@ class Mixtures {
         if ('q' in inp && !(inp.q >= 0 && inp.q <= 1)) throw new Error(`${fn}(): q = ${inp.q} must be a molar vapor fraction from 0 to 1 (a saturated or two-phase state)`);
         if ('t' in inp && !(inp.t > 0)) throw new Error(`${fn}(): T = ${inp.t} K must be positive`);
         if ('p' in inp && !(inp.p > 0)) throw new Error(`${fn}(): P = ${inp.p} Pa must be positive`);
-        const ck = `${fn}|${c.key}|${JSON.stringify(inp)}`;
+        const ck = `${fn}|${c.key}|${m.gamma ? m.gamma.key : ''}|${JSON.stringify(inp)}`;
         let st = Mixtures.states.get(ck);
         if (st) { Mixtures.states.delete(ck); Mixtures.states.set(ck, st); }   // most recent last
         else if (has('t', 'p', 'x')) st = Mixtures.stateTPz(m, inp.t, inp.p, inp.x);
@@ -1272,7 +1362,7 @@ class Mixtures {
             if (inp.q !== 0 && inp.q !== 1) throw new Error(`${fn}(): with T, P and q, q must be 0 (the saturated liquid) or 1 (the saturated vapor); give x as well for other states`);
             // two fluids at T, P: the compositions of the phases, x1 = (1 - K2)/(K1 - K2), y1 = K1 x1
             const T = inp.t, P = inp.p, none = `${fn}(): at T = ${T} K, P = ${P} Pa there are no two phases of ${c.key} in equilibrium`;
-            let lnK = m.ideal ? Mixtures.lnK(m, T, P, [0.5, 0.5], [0.5, 0.5]) : Mixtures.wilson(c, T, P), x, y;
+            let lnK = m.real ? Mixtures.wilson(c, T, P) : Mixtures.lnK(m, T, P, [0.5, 0.5], [0.5, 0.5]), x, y;
             for (let it = 0; it < 300; it++) {
                 const K = lnK.map(Math.exp), x1 = (1 - K[1]) / (K[0] - K[1]);
                 if (!(x1 > -1e-9 && x1 < 1 + 1e-9 && K[0] * x1 < 1 + 1e-9)) throw new Error(none);
@@ -1282,19 +1372,36 @@ class Mixtures {
                 lnK = next;
                 if (d < 1e-9) break;
             }
-            if (!m.ideal && Math.abs(x[0] - y[0]) < 1e-6) throw new Error(none);
+            if (m.real && Math.abs(x[0] - y[0]) < 1e-6) throw new Error(none);
             st = Mixtures.result(m, inp.t, inp.p, inp.q === 0 ? x : y, inp.q, x, y);
         } else if (has('p', 'x', 'h')) {
             const b = Mixtures.satT(m, inp.p, inp.x, 0).T, f = (T) => Mixtures.stateTPz(m, T, inp.p, inp.x).h - inp.h;   // h rises with T at fixed P and x
-            st = Mixtures.stateTPz(m, Mixtures.root(f, b, 10, m.ideal ? Math.max(...c.Tmin) : 50, m.ideal ? Math.min(...c.Tc) : 2000, `${fn}(): no temperature gives h = ${inp.h} J/kg at this P and x`), inp.p, inp.x);
+            st = Mixtures.stateTPz(m, Mixtures.root(f, b, 10, m.real ? 50 : Math.max(...c.Tmin), m.real ? 2000 : Math.min(...c.Tc), `${fn}(): no temperature gives h = ${inp.h} J/kg at this P and x`), inp.p, inp.x);
         } else throw new Error(`${fn}(): the inputs must be T, P, x or P, x, q or T, x, q or T, P, q or P, x, h`);
         if (!Mixtures.states.has(ck)) { Mixtures.states.set(ck, st); if (Mixtures.states.size > 500) Mixtures.states.delete(Mixtures.states.keys().next().value); }
         const pick = (arr, k) => arr[k];
+        if (oe) return Mixtures.extra(m, st, o);
         if (om) { const k = +om[2] - 1; return pick(om[1] === 'x' ? st.z : om[1] === 'xl' ? st.x : st.y, k); }
         if (o === 'x') return st.z[0];
         if (o === 'xl') return st.x[0];
         if (o === 'yv') return st.y[0];
         return { t: st.T, p: st.P, h: st.h, s: st.s, u: st.u, v: st.v, q: st.q, m: st.M }[o];
+    }
+    // Kay's rule: pseudocritical Tc, Pc and acentric factor of a mixture, mole-fraction averages of the fluids' (W. B. Kay,
+    // Ind. Eng. Chem. 28, 1014, 1936), for the generalized (Lee-Kesler) functions
+    static pseudo(a) {
+        const fn = 'pseudocritical';
+        if (a.length !== 3) throw new Error("pseudocritical(): use pseudocritical('Tc', 'fluid1&fluid2', x) (Tc, Pc or omega), x the mole fraction of the first fluid or an array of all of them");
+        const o = String(a[0]).trim().toLowerCase(), c = Mixtures.info(a[1], fn);
+        let z = a[2];
+        if (z && typeof z === 'object') z = (typeof z.toArray === 'function' ? z.toArray() : z).flat(Infinity).map(v => ThermoEngine.num(v, 'pseudocritical() x'));
+        else { z = ThermoEngine.num(z, 'pseudocritical() x'); if (c.n !== 2) throw new Error(`pseudocritical(): with ${c.n} fluids, give x as an array of ${c.n} mole fractions`); z = [z, 1 - z]; }
+        if (z.length !== c.n) throw new Error(`pseudocritical(): x has ${z.length} mole fractions for ${c.n} fluids`);
+        const sum = z.reduce((p, v) => p + v, 0);
+        if (Math.abs(sum - 1) > 1e-6 || !z.every(v => v >= 0)) throw new Error(`pseudocritical(): the mole fractions must be at least 0 and add up to 1, not ${+sum.toPrecision(8)}`);
+        const prop = { tc: c.Tc, pc: c.Pc, omega: c.w }[o];
+        if (!prop) throw new Error(`pseudocritical(): unknown output '${a[0]}'; use Tc, Pc or omega`);
+        return z.reduce((p, v, i) => p + v * prop[i], 0) / sum;
     }
     // molefraction('a&b', w) and massfraction('a&b', x): the fraction of the first fluid; for more fluids, an array and the
     // index of the fluid wanted
@@ -1418,6 +1525,257 @@ class Solutions {
     }
 }
 
+// Reactions and chemical equilibrium of ideal-gas mixtures, from the NASA polynomials of the ideal-gas species (IdealGas).
+// reaction(): dH, dS, dG, ln K and the reversible cell voltage of a reaction at T, standard pressure 1 bar; H2O(l) is liquid
+// water, from the gas by CoolProp's IAPWS-95 (its h and s relative to the ideal gas at the same T).
+// equilibrium(): the composition that minimizes the Gibbs energy at T, P (or at P and h, s, or adiabatic from reactants at Tr),
+// by the element-potential (RAND) method of S. Gordon and B. J. McBride, Computer program for calculation of complex chemical
+// equilibrium compositions and applications, NASA RP-1311, 1994 (Eqs. 2.24 to 2.26, and the step control of Eqs. 3.1 to 3.2):
+//     d ln n_j = -mu_j/RT + sum_i a_ij pi_i + d ln n,   mu_j/RT = g_j/RT + ln(n_j/n) + ln(P/P0)
+// with the pi_i and d ln n from the element balances and the total moles. Gas phase only (no solid carbon).
+class Chem {
+    static P0 = 1e5;
+    // 'CH4 + 2 (O2 + 3.76 N2)' -> [{ key, n, liquid }]
+    static parse(text, fn) {
+        const s = String(text).trim(), out = new Map();
+        let i = 0;
+        const skip = () => { while (s[i] === ' ') i++; };
+        const fail = () => { throw new Error(`${fn}(): cannot read '${s.slice(i) || s}' in '${s}'; write terms such as  2 O2  or  2 (O2 + 3.76 N2)  joined by +`); };
+        const side = (mult) => {
+            for (;;) {
+                skip();
+                let coef = 1;
+                const m = /^(\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(s.slice(i));
+                if (m) { coef = Number(m[0]); i += m[0].length; skip(); }
+                if (s[i] === '(') { i++; side(mult * coef); skip(); if (s[i] !== ')') fail(); i++; }
+                else {
+                    const n = /^[A-Za-z][A-Za-z0-9]*(\((?:l|g)\))?/.exec(s.slice(i));
+                    if (!n) fail();
+                    i += n[0].length;
+                    const liquid = n[1] === '(l)', base = n[0].replace(/\((?:l|g)\)$/, '');
+                    let key;
+                    try { key = IdealGas.species(base).key; } catch (e) { throw new Error(`${fn}(): '${base}' is not one of the ideal-gas species (see the list in Help)`); }
+                    if (liquid && key !== 'H2O') throw new Error(`${fn}(): only water can be liquid, H2O(l)`);
+                    const id = liquid ? 'H2O(l)' : key;
+                    out.set(id, (out.get(id) || 0) + mult * coef);
+                }
+                skip();
+                if (s[i] === '+') { i++; continue; }
+                return;
+            }
+        };
+        side(1);
+        if (i < s.length) fail();
+        return [...out].map(([key, n]) => ({ key, n, liquid: key === 'H2O(l)' }));
+    }
+    static atoms(key) { return IdealGas.formula(key === 'H2O(l)' ? 'H2O' : key); }
+    // molar h (J/mol) and s at 1 bar (J/(mol K)) of a species at T
+    static hs(key, T, fn) {
+        const R = IdealGas.R;
+        if (key !== 'H2O(l)') { const sp = IdealGas.species(key), a = IdealGas._poly(sp, T, `${fn}()`); return { h: R * T * IdealGas.hRT(a, T), s: R * IdealGas.s0R(a, T) }; }
+        if (!(T >= 273.16 && T < 647.096)) throw new Error(`${fn}(): liquid water needs 273.16 K <= T < 647.096 K, not ${T} K`);
+        const CP = ThermoEngine.CP, g = Chem.hs('H2O', T, fn), Pl = Math.max(Chem.P0, CP.PropsSI('P', 'T', T, 'Q', 0, 'Water'));
+        const hl = CP.PropsSI('Hmolar', 'T|liquid', T, 'P', Pl, 'Water'), sl = CP.PropsSI('Smolar', 'T|liquid', T, 'P', Pl, 'Water');
+        const hi = CP.PropsSI('Hmolar', 'T|gas', T, 'P', 1, 'Water'), si = CP.PropsSI('Smolar', 'T|gas', T, 'P', 1, 'Water') - R * Math.log(Chem.P0 / 1);   // ideal gas at 1 bar
+        return { h: g.h + hl - hi, s: g.s + sl - si };
+    }
+    static reaction(a) {
+        const fn = 'reaction', R = IdealGas.R;
+        if (a.length < 4 || a.length % 2 !== 0) throw new Error("reaction(): use reaction('output', 'H2 + 0.5 O2 -> H2O(l)', 'T', T), with 'n', electrons for E0");
+        const o = String(a[0]).trim().toLowerCase();
+        if (!['dh', 'ds', 'dg', 'lnk', 'k', 'e0'].includes(o)) throw new Error(`reaction(): unknown output '${a[0]}'; use dH, dS, dG, lnK, K or E0`);
+        const parts = String(a[1]).split(/<=>|->|=>|=/);
+        if (parts.length !== 2) throw new Error("reaction(): write the reaction as  reactants -> products");
+        const inp = {};
+        for (let i = 2; i < a.length; i += 2) {
+            const k = String(a[i]).trim().toLowerCase();
+            if (k !== 't' && k !== 'n') throw new Error(`reaction(): unknown input '${a[i]}'; the inputs are T and n (electrons, for E0)`);
+            inp[k] = ThermoEngine.num(a[i + 1], `reaction() ${a[i]}`);
+        }
+        if (!('t' in inp)) throw new Error('reaction(): give the temperature, T');
+        const L = Chem.parse(parts[0], fn), Rt = Chem.parse(parts[1], fn), terms = [...L.map(t => ({ ...t, n: -t.n })), ...Rt];
+        const bal = {};
+        terms.forEach(t => Object.entries(Chem.atoms(t.key)).forEach(([e, k]) => { bal[e] = (bal[e] || 0) + t.n * k; }));
+        const off = Object.entries(bal).filter(([e, v]) => Math.abs(v) > 1e-9);
+        if (off.length) throw new Error(`reaction(): the reaction is not balanced in ${off.map(([e, v]) => `${e} (${v > 0 ? '+' : ''}${+v.toPrecision(6)})`).join(', ')}`);
+        const T = inp.t;
+        let dH = 0, dS = 0;
+        terms.forEach(t => { const p = Chem.hs(t.key, T, fn); dH += t.n * p.h; dS += t.n * p.s; });
+        const dG = dH - T * dS;
+        if (o === 'e0') { if (!(inp.n > 0)) throw new Error('reaction(): E0 needs n, the electrons transferred per reaction as written'); return -dG / (inp.n * IdealGas.CONSTS.faraday[0]); }
+        return { dh: dH, ds: dS, dg: dG, lnk: -dG / (R * T), k: Math.exp(-dG / (R * T)) }[o];
+    }
+    // The system of an equilibrium problem, cached: elements, species and their atoms, the moles of atoms of the reactants
+    static systems = new Map();
+    static system(text, list, fn) {
+        const key = `${text}|${list || ''}`;
+        if (Chem.systems.has(key)) return Chem.systems.get(key);
+        const react = Chem.parse(text, fn);
+        if (react.some(r => r.liquid)) throw new Error(`${fn}(): the reactants are ideal gases; give a liquid fuel's enthalpy with the key h instead`);
+        if (react.some(r => !(r.n > 0))) throw new Error(`${fn}(): the amounts of the reactants must be positive`);
+        const b = {};
+        react.forEach(r => Object.entries(Chem.atoms(r.key)).forEach(([e, k]) => { b[e] = (b[e] || 0) + r.n * k; }));
+        const els = Object.keys(b);
+        let species;
+        if (list) {
+            species = String(list).trim().split(/[\s,]+/).map(nm => { try { return IdealGas.species(nm).key; } catch (e) { throw new Error(`${fn}(): '${nm}' is not one of the ideal-gas species`); } });
+            for (const sp of species) { const bad = Object.keys(Chem.atoms(sp)).filter(e => !els.includes(e)); if (bad.length) throw new Error(`${fn}(): ${sp} contains ${bad.join(', ')}, which the reactants do not`); }
+            for (const e of els) if (!species.some(sp => e in Chem.atoms(sp))) throw new Error(`${fn}(): no product species contains ${e}`);
+        } else {   // every species made of the reactants' elements, except organic molecules of more than 2 carbon atoms not among the reactants
+            species = Object.keys(IDEAL_GAS_DB).filter(sp => { const at = Chem.atoms(sp); return Object.keys(at).every(e => els.includes(e)) && ((at.C || 0) <= 2 || react.some(r => r.key === sp)); });
+        }
+        species = [...new Set(species)];
+        const A = els.map(e => species.map(sp => Chem.atoms(sp)[e] || 0));
+        const recs = species.map(sp => IdealGas.species(sp));
+        const lo = Math.max(...recs.map(r => Math.min(r.rec.T[0], IdealGas.TREF))), hi = Math.min(...recs.map(r => r.rec.T[r.rec.T.length - 1]));
+        const mass = react.reduce((m, r) => m + r.n * IdealGas.species(r.key).rec.M, 0);
+        const sys = { key, react, els, bv: els.map(e => b[e]), species, A, recs, lo, hi, mass, last: null };
+        Chem.systems.set(key, sys);
+        return sys;
+    }
+    // Equilibrium at T, P: the moles n_j (per the reactants as written)
+    static solveTP(sys, T, P, fn) {
+        if (!(T >= sys.lo && T <= sys.hi)) throw new Error(`${fn}(): T = ${+T.toPrecision(6)} K is outside ${sys.lo} to ${sys.hi} K, the range of the species data`);
+        const R = IdealGas.R, ns = sys.species.length, ne = sys.els.length, A = sys.A, b0 = sys.bv;
+        const g = sys.recs.map(sp => { const a = IdealGas._poly(sp, T, `${fn}()`); return IdealGas.hRT(a, T) - IdealGas.s0R(a, T) + Math.log(P / Chem.P0); });
+        let ln = sys.last ? sys.last.ln.slice() : sys.species.map(() => Math.log(0.1 / ns)), lnN = sys.last ? sys.last.lnN : Math.log(0.1);
+        for (let it = 0; it < 500; it++) {
+            const n = ln.map(Math.exp), N = Math.exp(lnN), mu = ln.map((v, j) => g[j] + v - lnN);
+            const M = Array.from({ length: ne + 1 }, () => new Array(ne + 2).fill(0));
+            for (let k = 0; k < ne; k++) {
+                for (let i = 0; i < ne; i++) { let s = 0; for (let j = 0; j < ns; j++) s += A[k][j] * A[i][j] * n[j]; M[k][i] = s; }
+                let bk = 0, s2 = 0; for (let j = 0; j < ns; j++) { bk += A[k][j] * n[j]; s2 += A[k][j] * n[j] * mu[j]; }
+                M[k][ne] = bk; M[k][ne + 1] = b0[k] - bk + s2;
+            }
+            let sn = 0, snm = 0; for (let j = 0; j < ns; j++) { sn += n[j]; snm += n[j] * mu[j]; }
+            for (let i = 0; i < ne; i++) M[ne][i] = M[i][ne];
+            M[ne][ne] = sn - N; M[ne][ne + 1] = N - sn + snm;
+            const x = Chem.gauss(M, fn);
+            const pi = x.slice(0, ne), dlnN = x[ne];
+            const d = ln.map((v, j) => { let s = -mu[j] + dlnN; for (let i = 0; i < ne; i++) s += A[i][j] * pi[i]; return s; });
+            // step control (Gordon and McBride, Eqs. 3.1 and 3.2)
+            let big = 5 * Math.abs(dlnN), lam2 = 1;
+            for (let j = 0; j < ns; j++) {
+                if (ln[j] - lnN > -18.420681) big = Math.max(big, Math.abs(d[j]));
+                else if (d[j] >= 0) lam2 = Math.min(lam2, Math.abs((-(ln[j] - lnN) - 9.2103404) / (d[j] - dlnN)));
+            }
+            const lam = Math.min(1, big > 0 ? 2 / big : 1, lam2);
+            for (let j = 0; j < ns; j++) ln[j] = Math.max(ln[j] + lam * d[j], -1e4);
+            lnN += lam * dlnN;
+            let conv = Math.abs(dlnN) * N / sn <= 1e-12;
+            for (let j = 0; j < ns && conv; j++) if (n[j] * Math.abs(d[j]) / sn > 1e-12) conv = false;
+            if (conv && lam === 1) break;
+            if (it === 499) throw new Error(`${fn}(): the equilibrium did not converge at T = ${T} K, P = ${P} Pa`);
+        }
+        sys.last = { ln: ln.slice(), lnN };
+        const n = ln.map(Math.exp), N = n.reduce((a, v) => a + v, 0);
+        let H = 0, S = 0;
+        const lnNt = Math.log(N);
+        sys.recs.forEach((sp, j) => { const a = IdealGas._poly(sp, T, `${fn}()`); H += n[j] * R * T * IdealGas.hRT(a, T); S += n[j] * R * (IdealGas.s0R(a, T) - (ln[j] - lnNt) - Math.log(P / Chem.P0)); });
+        return { T, P, n, N, H, S };
+    }
+    static gauss(M, fn) {   // solves the augmented system in place, partial pivoting
+        const m = M.length;
+        for (let c = 0; c < m; c++) {
+            let p = c; for (let r = c + 1; r < m; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+            if (!(Math.abs(M[p][c]) > 1e-300)) throw new Error(`${fn}(): the element balance cannot be solved (an element with no species to hold it?)`);
+            [M[c], M[p]] = [M[p], M[c]];
+            for (let r = 0; r < m; r++) if (r !== c) { const f = M[r][c] / M[c][c]; if (f) for (let k = c; k <= m; k++) M[r][k] -= f * M[c][k]; }
+        }
+        return M.map((r, i) => r[m] / r[i]);
+    }
+    static states = new Map();
+    static equilibrium(a) {
+        const fn = 'equilibrium';
+        if (a.length < 6 || a.length % 2 !== 0) throw new Error("equilibrium(): use equilibrium('output', 'CH4 + 2 (O2 + 3.76 N2)', 'key1', v1, 'key2', v2), keys T, P, h, s or Tr, and optionally 'species', 'CO2 CO ...'");
+        const o = String(a[0]).trim();
+        const inp = {};
+        let list = null;
+        for (let i = 2; i < a.length; i += 2) {
+            const k0 = String(a[i]).trim(), k = k0 === 'Tr' || k0 === 'tr' ? 'tr' : k0.toLowerCase();
+            if (k === 'species') { list = String(a[i + 1]); continue; }
+            if (!['t', 'p', 'h', 's', 'tr'].includes(k)) throw new Error(`equilibrium(): unknown input '${a[i]}'; the inputs are T, P, h, s and Tr (adiabatic, from the reactants at Tr), and 'species'`);
+            if (k in inp) throw new Error(`equilibrium(): input '${a[i]}' is given twice`);
+            inp[k] = ThermoEngine.num(a[i + 1], `equilibrium() value for '${a[i]}'`);
+        }
+        const sys = Chem.system(a[1], list, fn);
+        if (!('p' in inp) || Object.keys(inp).length !== 2) throw new Error('equilibrium(): give P and one of T, h, s or Tr');
+        if (!(inp.p > 0)) throw new Error(`equilibrium(): P = ${inp.p} Pa must be positive`);
+        const ck = `${sys.key}|${JSON.stringify(inp)}`;
+        let st = Chem.states.get(ck);
+        if (!st) {
+            const P = inp.p;
+            if ('t' in inp) st = Chem.solveTP(sys, inp.t, P, fn);
+            else {
+                let target, prop = 'H';
+                if ('tr' in inp) {
+                    if (!(inp.tr >= sys.lo && inp.tr <= sys.hi)) throw new Error(`equilibrium(): Tr = ${inp.tr} K is outside ${sys.lo} to ${sys.hi} K`);
+                    target = sys.react.reduce((s, r) => s + r.n * Chem.hs(r.key, inp.tr, fn).h, 0) / sys.mass;
+                } else if ('h' in inp) target = inp.h;
+                else { target = inp.s; prop = 'S'; }
+                const f = (T) => Chem.solveTP(sys, T, P, fn)[prop] / sys.mass - target;
+                const lo = sys.lo, hi = sys.hi, flo = f(lo), fhi = f(hi);
+                if (!(flo <= 0 && fhi >= 0)) throw new Error(`equilibrium(): no temperature between ${lo} and ${hi} K gives this ${prop === 'H' ? 'enthalpy' : 'entropy'}`);
+                const T = Mixtures.bracketed(f, lo, hi, flo, fhi, 1e-12 * Math.max(1, Math.abs(target)));
+                st = Chem.solveTP(sys, T, P, fn);
+            }
+            Chem.states.set(ck, st); if (Chem.states.size > 500) Chem.states.delete(Chem.states.keys().next().value);
+        }
+        const R = IdealGas.R, m = sys.mass;
+        const sm = /^([yn])_(.+)$/.exec(o);
+        if (sm) {
+            let key; try { key = IdealGas.species(sm[2]).key; } catch (e) { throw new Error(`equilibrium(): '${sm[2]}' is not one of the ideal-gas species`); }
+            const j = sys.species.indexOf(key);
+            if (j < 0) throw new Error(`equilibrium(): ${key} is not among the species of this equilibrium`);
+            return sm[1] === 'y' ? st.n[j] / st.N : st.n[j];
+        }
+        const v = st.N * R * st.T / (st.P * m);
+        const out = { t: st.T, p: st.P, h: st.H / m, s: st.S / m, v, u: st.H / m - st.P * v, m: m / st.N, n: st.N }[o.toLowerCase()];
+        if (out === undefined) throw new Error(`equilibrium(): unknown output '${a[0]}'; use T, P, h, s, u, v, M, N (total moles), y_CO2 (a mole fraction) or n_CO2 (moles)`);
+        return out;
+    }
+}
+
+// Joule-Thomson coefficient and inversion temperature of a CoolProp fluid
+const JouleThomson = {
+    // below the triple-point pressure only vapor exists, and CoolProp is told so
+    tk(f, P) { return P < ThermoEngine.CP.Props1SI(f, 'ptriple') ? 'T|gas' : 'T'; },
+    mu(fluid, T, P) {
+        const f = String(fluid).trim(), v = ThermoEngine.CP.PropsSI('d(T)/d(P)|Hmass', JouleThomson.tk(f, P), T, 'P', P, f);
+        if (!Number.isFinite(v)) ThermoEngine.fail(ThermoEngine.CP, `the Joule-Thomson coefficient of '${fluid}' at T = ${T} K, P = ${P} Pa`);
+        return v;
+    },
+    // the temperatures at P where mu = 0, found on a grid in ln T within one phase, then by bisection
+    cache: new Map(),
+    inversion(fluid, P, branch) {
+        const ck = `${fluid}|${P}|${branch}`;
+        if (JouleThomson.cache.has(ck)) return JouleThomson.cache.get(ck);
+        const r = JouleThomson.search(fluid, P, branch);
+        JouleThomson.cache.set(ck, r); if (JouleThomson.cache.size > 200) JouleThomson.cache.delete(JouleThomson.cache.keys().next().value);
+        return r;
+    },
+    search(fluid, P, branch) {
+        const CP = ThermoEngine.CP, f = String(fluid).trim();
+        const Tmin = CP.Props1SI(f, 'Tmin'), Tmax = CP.Props1SI(f, 'Tmax'), Pc = CP.Props1SI(f, 'pcrit');
+        const Ts = P < Pc && P >= CP.Props1SI(f, 'ptriple') ? CP.PropsSI('T', 'P', P, 'Q', 0, f) : null;
+        const tk = JouleThomson.tk(f, P), val = (T) => { try { const v = CP.PropsSI('d(T)/d(P)|Hmass', tk, T, 'P', P, f); return Number.isFinite(v) ? v : NaN; } catch (e) { return NaN; } };
+        const N = 600, grid = Array.from({ length: N + 1 }, (_, k) => Tmin * 1.0001 * Math.pow(Tmax / (Tmin * 1.0001), k / N));
+        const roots = [];
+        let T0 = grid[0], v0 = val(T0);
+        for (let k = 1; k <= N; k++) {
+            const T1 = grid[k], v1 = val(T1);
+            if (Number.isFinite(v0) && Number.isFinite(v1) && v0 * v1 < 0 && !(Ts !== null && Ts > T0 && Ts < T1)) {
+                let a = T0, b = T1, fa = v0;
+                for (let it = 0; it < 100 && b - a > 1e-10 * b; it++) { const mI = (a + b) / 2, fm = val(mI); if ((fm < 0) === (fa < 0)) { a = mI; fa = fm; } else b = mI; }
+                roots.push((a + b) / 2);
+            }
+            T0 = T1; v0 = v1;
+        }
+        if (!roots.length) throw new Error(`inversiontemperature(): '${f}' has no inversion temperature at P = ${P} Pa (above its maximum inversion pressure?)`);
+        return branch === 'lower' ? roots[0] : roots[roots.length - 1];
+    },
+};
+
 // ==========================================
 // 2. THERMODYNAMIC PROPERTY ENGINE (COOLPROP)
 // ==========================================
@@ -1504,9 +1862,17 @@ class ThermoEngine {
         atmosphere_altitude: { key: '', unit: 'm', kind: 'atm', desc: "Geometric altitude of the standard atmosphere where the pressure or the density has a value: atmosphere_altitude('P', P) or ('rho', rho)" },
         // --- mixtures of CoolProp's pure fluids, by mole fraction: see the Mixtures class ---
         mixture: { key: '', unit: '', kind: 'mix', desc: "Mixture by CoolProp's equation of state, for fluids whose every pair has parameters in CoolProp: mixture('output', 'ethanol&water', 'key1', v1, 'key2', v2, 'key3', v3); keys T, P, x (mole fraction of the first fluid, or an array), q (molar vapor fraction), h; outputs T, P, x, q, h, s, u, v, M, xl, yv" },
+        gammamixture: { key: '', unit: '', kind: 'mix', desc: "Mixture by modified Raoult's law with activity coefficients: gammamixture('output', 'ethanol&water', 'model', [parameters], 'key1', v1, 'key2', v2, 'key3', v3); models margules, vanlaar, wilson, nrtl; keys and outputs as mixture()" },
+        pseudocritical: { key: '', unit: '', kind: 'mix', desc: "Kay's rule: pseudocritical('Tc', 'nitrogen&CO2', x) for Tc, Pc or omega of a mixture, mole-fraction averages, for the lk_ functions" },
         idealmixture: { key: '', unit: '', kind: 'mix', desc: "Ideal mixture (Raoult's law) of any of CoolProp's pure fluids: idealmixture('output', 'benzene&toluene', 'key1', v1, 'key2', v2, 'key3', v3); keys and outputs as mixture()" },
         molefraction: { key: '', unit: '', kind: 'mix', desc: "Mole fraction from mass fractions: molefraction('ethanol&water', w) for the first fluid, or molefraction('a&b&c', [w1, w2, w3], i)" },
         massfraction: { key: '', unit: '', kind: 'mix', desc: "Mass fraction from mole fractions: massfraction('ethanol&water', x) for the first fluid, or massfraction('a&b&c', [x1, x2, x3], i)" },
+        // --- reactions and chemical equilibrium of ideal gases: see the Chem class ---
+        reaction: { key: '', unit: '', kind: 'chem', desc: "Reaction properties at T and 1 bar: reaction('output', 'H2 + 0.5 O2 -> H2O(l)', 'T', T); outputs dH, dS, dG (per reaction as written), lnK, K, and E0 with 'n', electrons" },
+        equilibrium: { key: '', unit: '', kind: 'chem', desc: "Chemical equilibrium of ideal gases (Gibbs minimization): equilibrium('output', 'CH4 + 2 (O2 + 3.76 N2)', 'key1', v1, 'key2', v2); keys P and one of T, h, s, Tr (adiabatic from reactants at Tr), optional 'species'; outputs T, P, h, s, u, v, M, N, y_X, n_X" },
+        // --- Joule-Thomson coefficient and inversion ---
+        joulethomson: { key: '', unit: 'K/Pa', kind: 'jt', desc: "Joule-Thomson coefficient (dT/dP at constant h) of a CoolProp fluid: joulethomson(fluid, T, P)" },
+        inversiontemperature: { key: '', unit: 'K', kind: 'jt', desc: "Joule-Thomson inversion temperature at P: inversiontemperature(fluid, P) for the upper one, or (fluid, P, 'lower')" },
         // --- solutions of a nonvolatile solute, ideal: see the Solutions class ---
         solution: { key: '', unit: '', kind: 'sol', desc: "Ideal solution of a nonvolatile solute: solution('output', 'NaCl&water', 'key1', v1, 'key2', v2); keys T, P, w (solute mass fraction) or m (molality); outputs P (vapor pressure), T (boiling point), dT, Tf (freezing point, water), dTf, Pi (osmotic pressure), aw, m, w" },
         // --- seawater at 1 atm (Sharqawy et al. 2010) and the ocean's pressure and depth (UNESCO 1983): see the Seawater class ---
@@ -1575,7 +1941,15 @@ class ThermoEngine {
         if (spec.kind === 'atm') return StdAtmosphere.evaluate(name, a);
         if (spec.kind === 'sea') return Seawater.evaluate(name, a);
         if (spec.kind === 'sol') return Solutions.evaluate(a);
-        if (spec.kind === 'mix') return (name === 'molefraction' || name === 'massfraction') ? Mixtures.convert(name, a) : Mixtures.evaluate(name, a);
+        if (spec.kind === 'mix') return (name === 'molefraction' || name === 'massfraction') ? Mixtures.convert(name, a) : name === 'pseudocritical' ? Mixtures.pseudo(a) : Mixtures.evaluate(name, a);
+        if (spec.kind === 'chem') return name === 'reaction' ? Chem.reaction(a) : Chem.equilibrium(a);
+        if (spec.kind === 'jt') {
+            if (name === 'joulethomson') { if (a.length !== 3) throw new Error('joulethomson(): use joulethomson(fluid, T, P)'); return JouleThomson.mu(a[0], ThermoEngine.num(a[1], 'joulethomson() T'), ThermoEngine.num(a[2], 'joulethomson() P')); }
+            if (a.length !== 2 && a.length !== 3) throw new Error("inversiontemperature(): use inversiontemperature(fluid, P) or (fluid, P, 'lower')");
+            const br = a.length === 3 ? String(a[2]).trim().toLowerCase() : 'upper';
+            if (br !== 'upper' && br !== 'lower') throw new Error("inversiontemperature(): the third argument is 'upper' or 'lower'");
+            return JouleThomson.inversion(a[0], ThermoEngine.num(a[1], 'inversiontemperature() P'), br);
+        }
         if (spec.kind === 'exergy') {   // physical exergy relative to the same fluid at T0, P0, through the property functions above
             if (a.length !== 5 && a.length !== 7) throw new Error(`${name}(): use ${name}(fluid, T, P, T0, P0) or ${name}(fluid, 'key1', v1, 'key2', v2, T0, P0)`);
             const T0 = ThermoEngine.num(a[a.length - 2], `${name}() T0`), P0 = ThermoEngine.num(a[a.length - 1], `${name}() P0`);

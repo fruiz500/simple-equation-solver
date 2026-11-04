@@ -14,6 +14,7 @@ class EESParser {
         this.odeCalls = [];
         this.saved = new Map();   // name -> guess, bounds and unit of the last parse that succeeded, kept through parse errors
         this.uncertain = new Map();   // name -> { u (SI), eq (index in parsedASTs), line, given (as written) }: values given with ±
+        this.plots = [];   // plot lines, { src, lineNo }: drawn from the results after Solve (plots.js), not equations
     }
 
     parse(text) {
@@ -22,6 +23,7 @@ class EESParser {
         this.odeCalls = [];
         this.variables = new Map();
         this.uncertain = new Map();
+        this.plots = [];
 
         // Comments are blanked but keep their line breaks, so messages can give line numbers
         let cleanText = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*|\{[^}]*\}/g, (c) => c.replace(/[^\n]/g, ' '));
@@ -65,6 +67,14 @@ class EESParser {
             const multi = line.match(/^\[([^\]]+)\]\s*=\s*([A-Za-z_]\w*)\s*\((.*)\)$/);
             if (multi && UserFunctions.active.has(multi[2])) { this.addMultiCall(multi, line, lineNo); continue; }
 
+            // A plot line, such as  propertyplot('water', 'Ts'): set aside, and drawn after Solve
+            if (/^(propertyplot|contourplot|heatmapplot|surfaceplot)\s*\(/.test(line)) {
+                let node;
+                try { node = math.parse(line); } catch (e) { throw new Error(`Line ${lineNo}: ${e.message} in '${line}'.`); }
+                if (!node.isFunctionNode) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
+                this.plots.push({ src: line, lineNo });
+                continue;
+            }
             // A given value with its uncertainty:  T_1 = 300 [K] +- 2 [K]  ->  T_1 = 300 [K], and the uncertainty is kept
             const unc = EESParser.splitUncertainty(line);
             if (unc) line = unc.head;

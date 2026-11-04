@@ -26,7 +26,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - Equations can be solved backward: any variable can be the unknown, including the argument of a property function, a correlation or a table interpolation.
 - Arrays and matrices, `duplicate` blocks for repeated equations (finite-difference grids, for example), and long lines that continue across open brackets.
 - User functions with several inputs and outputs, `if`/`elseif`, `for` and `while` loops, and `return`/`break`. Functions can be called from equations and solved through.
-- Every [math.js](https://mathjs.org) function is available, plus `if(c, a, b)` and `c ? a : b`.
+- Every [math.js](https://mathjs.org) function is available, plus `if(c, a, b)` and `c ? a : b`, and these Matlab-style functions: `linspace`, `logspace`, `trapz`, `cumtrapz`, `polyfit`, `polyval`, `lsqfit` (nonlinear least squares), `expint`, `gammainc`, `betainc`, `erfinv`, `normcdf`, `norminv`, `tcdf` and `tinv`.
 
 **Units**
 - Unit tags such as `[kPa]`, `[W/(m^2 K)]` and `[degC]` on values and results. Calculations are done in SI and results are shown in the unit you choose.
@@ -41,8 +41,10 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - Solids: conductivity, specific heat, density and diffusivity of the metals and nonmetals in Incropera's Tables A.1 to A.3, interpolated in temperature.
 - The U.S. Standard Atmosphere 1976, from -5 to 86 km: temperature, pressure, density, speed of sound, viscosity, conductivity and gravity, and the pressure or density altitude.
 - Mixtures of any of CoolProp's pure fluids, by mole fraction: bubble and dew points, flashes, the compositions of both phases, and h, s, u, v. `mixture()` uses CoolProp's mixture equation of state (ethanol–water with its azeotrope, CO2 in water, air, hydrocarbons, refrigerants), and `idealmixture()` uses Raoult's law for any number of fluids.
+- Chemical equilibrium of ideal-gas mixtures by Gibbs minimization (the method of NASA's CEA): equilibrium compositions and adiabatic flame temperatures with dissociation. Reaction properties (ΔH, ΔS, ΔG, ln K) and reversible fuel-cell voltages, with liquid water.
+- Fugacities, activity coefficients and excess properties of mixtures; activity-coefficient models (Margules, van Laar, Wilson, NRTL) with your parameters; Kay's rule for the generalized charts; the Joule–Thomson coefficient and inversion temperatures.
 - Solutions of a solid solute (salts, sugars, glycols, urea; or any solute given by its molar mass and ions) as ideal solutions: vapor pressure, boiling and freezing points, osmotic pressure.
-- Seawater at atmospheric pressure, 0 to 120 °C and 0 to 120 g/kg: density, specific heat, conductivity, viscosity, diffusivity, Prandtl number and boiling-point elevation. Also the pressure at a depth in the ocean, and the depth at a pressure.
+- Seawater at atmospheric pressure, 0 to 120 °C and 0 to 120 g/kg: density, specific heat, conductivity, viscosity, diffusivity, Prandtl number and boiling-point elevation; and, from TEOS-10 at any pressure, from brackish water to brine, enthalpy, entropy, Gibbs energy, water activity, osmotic coefficient and osmotic pressure (for reverse-osmosis design). Also the pressure at a depth in the ocean, and the depth at a pressure.
 - Generalized compressibility (Lee–Kesler): Z, the enthalpy and entropy departures and the fugacity coefficient from Tr, Pr and the acentric factor, as in the generalized charts and tables. The fugacity of every CoolProp fluid is available too.
 
 **Compressible flow**
@@ -58,7 +60,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 
 **Tools**
 - **Parametric tables:** sweep a variable and get every result as a column.
-- **Plots:** overlaid curves, linear or log axes, straight or smooth lines, light and dark color schemes, adjustable text size, and export as PNG or SVG for publication.
+- **Plots:** T-s, P-h, P-v and h-s diagrams with the saturation dome and the states of a cycle, drawn by a plot line such as `propertyplot('water', 'Ts', 'cycle')`; contour, heat-map and 3-D surface plots of two-dimensional arrays; error bars on the states from the propagated uncertainties; a second y-axis; overlaid curves, linear or log axes, straight or smooth lines, light and dark color schemes, adjustable text size, and export as PNG or SVG for publication.
 - **Min/Max optimization** of one or more free variables within bounds. It uses BFGS (the default) or Nelder–Mead, with an optional multistart, and Brent's or golden-section search for one variable.
 - **ODE blocks:** initial-value problems solved alongside the algebraic equations. They use adaptive Dormand–Prince 5(4) or, for stiff systems, a linearly implicit extrapolation method. The solver can also solve for an end time that meets a condition.
 - **Uncertainty:** give measured values with their uncertainty, as `T_1 = 400 [degC] +- 1 [K]` or `P_1 = 3000 [kPa] +- 1 %`, and every result gets its uncertainty, by first-order propagation for independent inputs, with each input's share.
@@ -67,6 +69,8 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - **Save** and **Open** sessions as plain-text `.ses` files (equations plus variable settings), and export results and tables as tab-separated text that opens in Excel.
 
 The full manual, with many worked examples, is in [`help.html`](help.html), which also opens from the **Help** button. Every result shown in the help examples was computed by the program, and the test suite checks them again.
+
+- **From EES:** a converter for EES programs: property calls, units of the EES unit system, functions, procedures and duplicate blocks, with a report of what to check.
 
 ## Getting started
 
@@ -92,6 +96,8 @@ You can also serve the folder with GitHub Pages or any static web server. Nothin
 | `thermo.js` | CoolProp interface and NASA ideal-gas data |
 | `solids.js` | Solid property tables |
 | `eqformat.js` | Formatted (MathML) display of the equations |
+| `plots.js` | Plot lines: property diagrams, contour, heat-map and surface plots |
+| `convert.js`, `convert.html` | The EES to SES converter (opened by From EES... in the Equations pane) |
 | `correlations.js` | Heat transfer and friction correlations, generalized compressibility, compressible flow |
 | `help.html` | The manual |
 | `tests/` | Automated tests (see below) |
@@ -133,9 +139,10 @@ Run `node run.mjs --verbose` for details, or `node run.mjs correlations` to run 
 - Ideal-gas properties come from B. J. McBride, S. Gordon and M. A. Reno, *Coefficients for Calculating Thermodynamic and Transport Properties of Individual Species*, NASA TM-4513, 1993. [NASA Technical Reports Server](https://ntrs.nasa.gov/citations/19940013151)
 - The Moody chart friction factor uses C. F. Colebrook, "Turbulent flow in pipes, with particular reference to the transition region between the smooth and rough pipe laws," *Journal of the Institution of Civil Engineers* 11(4), 133–156, 1939.
 - The regenerator model follows R. K. Shah and D. P. Sekulić, *Fundamentals of Heat Exchanger Design*, Wiley, 2003, Ch. 5; the Kays and London correlation given for comparison is from W. M. Kays and A. L. London, *Compact Heat Exchangers*, 3rd ed., McGraw-Hill, 1984.
-- Bessel function values were checked against M. Abramowitz and I. A. Stegun, *Handbook of Mathematical Functions*, NBS, 1964. Radiation functions use the CODATA 2018 values of h, c and k.
+- Bessel function values, and those of the exponential integral and the normal and t distributions, were checked against M. Abramowitz and I. A. Stegun, *Handbook of Mathematical Functions*, NBS, 1964. The log-gamma function behind the incomplete gamma and beta functions is the Lanczos series of W. H. Press et al., *Numerical Recipes*, 3rd ed., Cambridge, 2007, sec. 6.1; nonlinear fits use the Levenberg–Marquardt method (same book, sec. 15.5). Radiation functions use the CODATA 2018 values of h, c and k.
+- Chemical equilibrium: S. Gordon and B. J. McBride, *Computer Program for Calculation of Complex Chemical Equilibrium Compositions and Applications*, NASA RP-1311, 1994 ([NTRS](https://ntrs.nasa.gov/citations/19950013764)); checked against the NIST-JANAF thermochemical tables ([janaf.nist.gov](https://janaf.nist.gov)) and the CEA flame temperatures of O. A. Marzouk, *Eng. Technol. Appl. Sci. Res.* 13(4), 11437–11444, 2023. Activity-coefficient models as in J. M. Smith, H. C. Van Ness and M. M. Abbott, *Introduction to Chemical Engineering Thermodynamics*, McGraw-Hill. Kay's rule: W. B. Kay, *Ind. Eng. Chem.* 28, 1014–1019, 1936.
 - Mixtures: the multi-fluid form of O. Kunz and W. Wagner, "The GERG-2008 wide-range equation of state for natural gases and other mixtures," *J. Chem. Eng. Data* 57, 3032–3091, 2012, with CoolProp's parameters for each pair; the flash after H. H. Rachford and J. D. Rice, *J. Petrol. Technol.* 4(10), Sec. 1, p. 19 and Sec. 2, p. 3, 1952, started with the K-values of G. M. Wilson, "A modified Redlich-Kwong equation of state, application to general physical data calculations," 65th National AIChE Meeting, Cleveland, 1968, Paper 15C. Checked against L. W. Cornell and R. E. Montonna, *Ind. Eng. Chem.* 25, 1331, 1933, and P. Susial et al., *J. Chem. Eng. Data* 66, 928–946, 2021 ([doi:10.1021/acs.jced.0c00686](https://doi.org/10.1021/acs.jced.0c00686)).
-- Seawater: M. H. Sharqawy, J. H. Lienhard V and S. M. Zubair, "Thermophysical properties of seawater: a review of existing correlations and data," *Desalination and Water Treatment* 16, 354–380, 2010 ([doi:10.5004/dwt.2010.1079](https://doi.org/10.5004/dwt.2010.1079)), through CoolProp's fit of them, checked against K. G. Nayar, M. H. Sharqawy and J. H. Lienhard V, *MIT Seawater Property Tables* ([web.mit.edu/seawater](https://web.mit.edu/seawater)). Pressure and depth: N. P. Fofonoff and R. C. Millard, *Algorithms for computation of fundamental properties of seawater*, UNESCO Technical Papers in Marine Science 44, 1983.
+- Seawater: M. H. Sharqawy, J. H. Lienhard V and S. M. Zubair, "Thermophysical properties of seawater: a review of existing correlations and data," *Desalination and Water Treatment* 16, 354–380, 2010 ([doi:10.5004/dwt.2010.1079](https://doi.org/10.5004/dwt.2010.1079)), through CoolProp's fit of them, checked against K. G. Nayar, M. H. Sharqawy and J. H. Lienhard V, *MIT Seawater Property Tables* ([web.mit.edu/seawater](https://web.mit.edu/seawater)). Enthalpy, entropy, Gibbs energy and the osmotic properties: TEOS-10, IAPWS R13-08, *Release on the IAPWS Formulation 2008 for the Thermodynamic Properties of Seawater* ([iapws.org](https://iapws.org/relguide/Seawater.html)), and R. Feistel, *Deep-Sea Res. I* 55, 1639–1671, 2008; the saline Gibbs function uses the 64 coefficients of the release's Table 2 and was checked against its check values and against the TEOS-10 GSW-C library ([teos-10.org](https://www.teos-10.org)). Pressure and depth: N. P. Fofonoff and R. C. Millard, *Algorithms for computation of fundamental properties of seawater*, UNESCO Technical Papers in Marine Science 44, 1983.
 - Standard atmosphere: *U.S. Standard Atmosphere, 1976*, NOAA, NASA and USAF, U.S. Government Printing Office, 1976 (NASA TM-X-74335).
 - Generalized compressibility: B. I. Lee and M. G. Kesler, "A generalized thermodynamic correlation based on three-parameter corresponding states," *AIChE Journal* 21(3), 510–527, 1975 ([doi:10.1002/aic.690210313](https://doi.org/10.1002/aic.690210313)).
 - Compressible flow: the perfect-gas relations of J. D. Anderson, *Modern Compressible Flow*, 3rd ed., McGraw-Hill, 2003, and Ames Research Staff, *Equations, Tables, and Charts for Compressible Flow*, NACA Report 1135, 1953. Particle-laden flow: F. Ruiz, "Adiabatic interaction of particles with a compressible flow: basic mechanics," *Journal of Propulsion and Power* 16(3), 415–420, 2000 ([doi:10.2514/2.5605](https://doi.org/10.2514/2.5605)), with the mixture sound speed of G. B. Wallis, *One-Dimensional Two-Phase Flow*, McGraw-Hill, 1969.

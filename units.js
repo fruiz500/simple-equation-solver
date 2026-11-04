@@ -110,7 +110,9 @@ class UnitConsistencyChecker {
         s: 'J/(kg K)', entropy: 'J/(kg K)', d: 'kg/m^3', density: 'kg/m^3',
         u: 'J/kg', internalenergy: 'J/kg', q: '', quality: '', x: '', v: 'm^3/kg', specificvolume: 'm^3/kg'
     };
-    static MIX_DIM = { t: 'K', p: 'Pa', x: '', q: '', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', xl: '', yv: '', m: 'kg/mol' };   // mixture() keys and outputs
+    static MIX_DIM = { t: 'K', p: 'Pa', x: '', q: '', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', xl: '', yv: '', m: 'kg/mol', he: 'J/mol', se: 'J/(mol K)', ge: 'J/mol', ve: 'm^3/mol' };   // mixture() keys and outputs
+    static EQ_DIM = { t: 'K', p: 'Pa', h: 'J/kg', s: 'J/(kg K)', u: 'J/kg', v: 'm^3/kg', m: 'kg/mol', n: '', tr: 'K' };   // equilibrium() keys and outputs
+    static RX_DIM = { dh: 'J', ds: 'J/K', dg: 'J', lnk: '', k: '', e0: 'V', t: 'K', n: '' };   // reaction(): per reaction as written (mol)
     static SEA_DIM = { rho: 'kg/m^3', cp: 'J/(kg K)', k: 'W/(m K)', mu: 'Pa s', nu: 'm^2/s', alpha: 'm^2/s', pr: '', bpe: 'K' };
     static SOL_DIM = { t: 'K', p: 'Pa', w: '', m: 'mol/kg', nu: '', dt: 'K', tf: 'K', dtf: 'K', pi: 'Pa', aw: '' };   // solution() keys and outputs (M: kg/mol)   // seawater() outputs
     static ATM_DIM = { t: 'K', p: 'Pa', rho: 'kg/m^3', c: 'm/s', mu: 'Pa s', k: 'W/(m K)', nu: 'm^2/s', g: 'm/s^2', h: 'm' };   // atmosphere() outputs
@@ -231,6 +233,11 @@ class UnitConsistencyChecker {
             for (let i = 2; i < args.length; i += 2) sk(i);
         } else if (spec.kind === 'mix') {
             if (name === 'mixture' || name === 'idealmixture') { keyed(2, 3, U.MIX_DIM); keyed(4, 5, U.MIX_DIM); keyed(6, 7, U.MIX_DIM); }
+            if (name === 'gammamixture') { keyed(4, 5, U.MIX_DIM); keyed(6, 7, U.MIX_DIM); keyed(8, 9, U.MIX_DIM); }
+        } else if (spec.kind === 'chem') {
+            for (let i = 2; i + 1 < args.length; i += 2) keyed(i, i + 1, name === 'reaction' ? U.RX_DIM : U.EQ_DIM);
+        } else if (spec.kind === 'jt') {
+            if (name === 'joulethomson') expected.push([1, 'K'], [2, 'Pa']); else expected.push([1, 'Pa']);
         } else if (spec.kind === 'sea') {
             if (name === 'seawater') expected.push([1, 'K'], [2, '']); else expected.push([0, name === 'oceandepth' ? 'Pa' : 'm'], [1, '']);
         }
@@ -350,9 +357,19 @@ class UnitConsistencyChecker {
                     const k0 = node.args[0], u = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? U.SOL_DIM[k0.value.trim().toLowerCase()] : undefined;
                     return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
                 }
-                if (tspec.kind === 'mix' && (name === 'mixture' || name === 'idealmixture')) {   // the unit of the output named first
+                if (tspec.kind === 'chem') {   // the unit of the output named first
                     const k0 = node.args[0], o = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? k0.value.trim().toLowerCase() : null;
-                    const u = o === null ? undefined : /^(x|xl|yv)\d+$/.test(o) ? '' : U.MIX_DIM[o];
+                    const u = o === null ? undefined : /^[yn]_/.test(o) ? '' : (name === 'reaction' ? U.RX_DIM : U.EQ_DIM)[o];
+                    return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
+                }
+                if (tspec.kind === 'mix' && name === 'pseudocritical') {
+                    const k0 = node.args[0], o = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? k0.value.trim().toLowerCase() : null;
+                    const u = { tc: 'K', pc: 'Pa', omega: '' }[o];
+                    return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
+                }
+                if (tspec.kind === 'mix' && (name === 'mixture' || name === 'idealmixture' || name === 'gammamixture')) {   // the unit of the output named first
+                    const k0 = node.args[0], o = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? k0.value.trim().toLowerCase() : null;
+                    const u = o === null ? undefined : /^(x|xl|yv|phil|phiv|gamma)\d+$/.test(o) ? '' : /^f\d+$/.test(o) ? 'Pa' : U.MIX_DIM[o];
                     return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
                 }
                 if (tspec.kind === 'sea' && name === 'seawater') {   // the unit of the output named first

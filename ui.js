@@ -475,9 +475,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function plotStyleUpdate() {
         const t = PLOT_THEMES[plotStyle.theme];
         const u = { paper_bgcolor: t.paper, plot_bgcolor: t.plot, 'font.color': t.text, 'font.size': plotStyle.font };
-        [['xaxis', plotStyle.logX], ['yaxis', plotStyle.logY]].forEach(([a, log]) => Object.assign(u, {
+        const pc = document.getElementById('plot-container'), axes = [['xaxis', plotStyle.logX], ['yaxis', plotStyle.logY]];
+        if (pc && pc.layout && pc.layout.yaxis2) axes.push(['yaxis2', plotStyle.logY]);   // the second vertical axis (Y2)
+        axes.forEach(([a, log]) => Object.assign(u, {
             [a + '.type']: log ? 'log' : 'linear', [a + '.autorange']: true, [a + '.color']: t.text, [a + '.gridcolor']: t.grid, [a + '.zerolinecolor']: t.zero,
-            [a + '.linecolor']: t.text, [a + '.showline']: true, [a + '.mirror']: true, [a + '.ticks']: 'outside', [a + '.automargin']: true,
+            [a + '.linecolor']: t.text, [a + '.showline']: true, [a + '.mirror']: !(pc && pc.layout && pc.layout.yaxis2), [a + '.ticks']: 'outside', [a + '.automargin']: true,
         }));
         return u;
     }
@@ -485,7 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function warnLogPoints(pc) {
         [['x', plotStyle.logX], ['y', plotStyle.logY]].forEach(([ax, log]) => {
             if (!log) return;
-            const n = pc.data.reduce((s, tr) => s + (tr[ax] || []).filter(v => !(v > 0)).length, 0);
+            const n = pc.data.reduce((s, tr) => s + (tr[ax] || []).filter(v => v !== null && !(v > 0)).length, 0);
             if (n) console.warn(`Log ${ax} axis: ${n} point(s) with ${ax} <= 0 cannot be shown.`);
         });
     }
@@ -509,20 +511,25 @@ document.addEventListener('DOMContentLoaded', () => {
         const yVals = dataArray.map(r => r[yKey]);
 
         // Configure trace type
-        let trace = {
-            x: xVals,
-            y: yVals,
-            name: `${yKey} vs ${xKey}`
+        const style = (tr) => {
+            if (chartType === 'bar') {
+                tr.type = 'bar';
+                tr.marker = { opacity: 0.8 };
+            } else {
+                tr.type = 'scatter';
+                tr.mode = chartType;
+                tr.line = { width: 2, shape: plotStyle.line };
+                tr.marker = { size: 6 };
+            }
+            return tr;
         };
-
-        if (chartType === 'bar') {
-            trace.type = 'bar';
-            trace.marker = { opacity: 0.8 };
-        } else {
-            trace.type = 'scatter';
-            trace.mode = chartType;
-            trace.line = { width: 2, shape: plotStyle.line };
-            trace.marker = { size: 6 };
+        const trace = style({ x: xVals, y: yVals, name: `${yKey} vs ${xKey}` });
+        // Y2: a second column on its own vertical axis, on the right
+        const y2Key = (document.getElementById('plot-y2-select') || {}).value || '';
+        const traces = [trace];
+        if (y2Key && y2Key !== yKey && dataArray[0] && y2Key in dataArray[0]) {
+            traces.push(style({ x: xVals, y: dataArray.map(r => r[y2Key]), name: `${y2Key} vs ${xKey} (right axis)`, yaxis: 'y2' }));
+            if (chartType !== 'bar') traces[1].line.dash = 'dash';
         }
 
         // Layout: axis titles here; colors, text size and axis types come from plotStyle (plotStyleUpdate)
@@ -530,8 +537,13 @@ document.addEventListener('DOMContentLoaded', () => {
             margin: { t: 25, r: 25, l: 50, b: 45 },
             xaxis: { title: headerCell(xKey) },
             yaxis: { title: headerCell(yKey) },
-            showlegend: isOverlay // Enable legend automatically when overlaying traces
+            showlegend: isOverlay || traces.length > 1 // Enable legend automatically when overlaying traces
         };
+        if (traces.length > 1) {
+            layout.yaxis2 = { title: headerCell(y2Key), overlaying: 'y', side: 'right', showgrid: false };
+            layout.margin.r = 60;
+            layout.legend = { x: 0.02, y: 0.98 };
+        }
 
         // Plotly modebar (zoom, pan, reset); its camera button is replaced by Save image, which sets size and format
         // The legend can be dragged anywhere, and a curve renamed by clicking its name in the legend
@@ -544,15 +556,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Handle plot overlay vs fresh plot redraw
         if (isOverlay && container.data && container.data.length > 0) {
-            Plotly.addTraces('plot-container', trace);
-            Plotly.relayout('plot-container', { showlegend: true });   // two curves or more: show which is which
+            Plotly.addTraces('plot-container', traces);
+            const more = { showlegend: true };   // two curves or more: show which is which
+            if (traces.length > 1 && !container.layout.yaxis2) Object.assign(more, { yaxis2: layout.yaxis2, 'margin.r': 60 });
+            Plotly.relayout('plot-container', more);
+            if (traces.length > 1) Plotly.relayout('plot-container', plotStyleUpdate());
         } else {
+            if (plotStyle.saved) {   // after a plot line: the log axes chosen before it
+                Object.assign(plotStyle, plotStyle.saved); plotStyle.saved = null;
+                document.getElementById('plot-logx').checked = plotStyle.logX; document.getElementById('plot-logy').checked = plotStyle.logY;
+            }
             // PURGE FIX: Wipe previous Plotly instance and bindings from DOM element
             Plotly.purge('plot-container');
-            Plotly.newPlot('plot-container', [trace], layout, config);
+            Plotly.newPlot('plot-container', traces, layout, config);
             Plotly.relayout('plot-container', plotStyleUpdate());
         }
         warnLogPoints(container);
+    }
+
+    // A plot line (propertyplot, contourplot, heatmapplot, surfaceplot; plots.js), drawn from a set of results in SI.
+    // It replaces the plot shown; log x and log y follow the diagram (log P on P-h, for example).
+    function drawPlotLine(src, values) {
+        const { sc, units } = PlotLines.scope(values, unitOf);
+        const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units });
+        if (!plotStyle.saved) plotStyle.saved = { logX: plotStyle.logX, logY: plotStyle.logY };   // put back for the next table plot
+        plotStyle.logX = out.logx; plotStyle.logY = out.logy;
+        document.getElementById('plot-logx').checked = out.logx; document.getElementById('plot-logy').checked = out.logy;
+        const pc = document.getElementById('plot-container');
+        Plotly.purge(pc);
+        Plotly.newPlot(pc, out.data, Object.assign({ margin: { t: out.layout.title ? 35 : 25, r: 25, l: 55, b: 45 } }, out.layout),
+            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'] });
+        const st = plotStyleUpdate();
+        if (out.three) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
+        Plotly.relayout(pc, st);
+        return out.note;
+    }
+    function drawPlotLines(list, values) {
+        list.forEach(pl => {
+            try { console.log(`Plot, line ${pl.lineNo}: ${drawPlotLine(pl.src, values)}.`); }
+            catch (err) { console.error(`Plot, line ${pl.lineNo}: ${err.message}`); }
+        });
+        if (list.length > 1) console.log(`${list.length} plot lines: the Plot pane shows the last. Type another one on the command line to show it.`);
     }
 
     // ==========================================
@@ -647,8 +691,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const plotData = tb.rows.map(r => Object.fromEntries(tb.cols.map((k, i) => [k, toDisp(k, r[i])])));
                 updatePlotControls(plotData, tb.indep, tb.states[0]);
                 renderPlot(plotData, plotXSelect.value, plotYSelect.value, plotTypeSelect.value, plotOverlayCheck.checked);
-                console.log(`ode block, line ${tb.no}: ${tb.rows.length} output rows (${tb.steps} internal steps); plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
+               console.log(`ode block, line ${tb.no}: ${tb.rows.length} output rows (${tb.steps} internal steps); plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
             }
+            if (parser.plots.length) drawPlotLines(parser.plots, currentResults());
         } catch (err) {
             console.error("Solver Error: " + err.message);
         }
@@ -868,13 +913,16 @@ document.addEventListener('DOMContentLoaded', () => {
         // Keep the user's current Y choice if it still exists in the new dataset
         const prevY = plotYSelect.value;
         const ySel = keys.includes(prevY) ? prevY : defaultY;
+        const y2Select = document.getElementById('plot-y2-select'), prevY2 = y2Select.value;
 
         plotXSelect.innerHTML = '';
         plotYSelect.innerHTML = '';
+        y2Select.innerHTML = '<option value="">(none)</option>';
 
         keys.forEach(k => {
             plotXSelect.innerHTML += `<option value="${k}" ${k === defaultX ? 'selected' : ''}>${k}</option>`;
             plotYSelect.innerHTML += `<option value="${k}" ${k === ySel ? 'selected' : ''}>${k}</option>`;
+            y2Select.innerHTML += `<option value="${k}" ${k === prevY2 ? 'selected' : ''}>${k}</option>`;
         });
     }
 
@@ -906,8 +954,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Log axes, colors and text size: applied at once to the plot shown
-    document.getElementById('plot-logx').addEventListener('change', (e) => { plotStyle.logX = e.target.checked; applyPlotStyle(); });
-    document.getElementById('plot-logy').addEventListener('change', (e) => { plotStyle.logY = e.target.checked; applyPlotStyle(); });
+    document.getElementById('plot-logx').addEventListener('change', (e) => { plotStyle.logX = e.target.checked; plotStyle.saved = null; applyPlotStyle(); });
+    document.getElementById('plot-logy').addEventListener('change', (e) => { plotStyle.logY = e.target.checked; plotStyle.saved = null; applyPlotStyle(); });
     document.getElementById('plot-theme').addEventListener('change', (e) => { plotStyle.theme = e.target.value; applyPlotStyle(); });
     document.getElementById('plot-line').addEventListener('change', (e) => {
         plotStyle.line = e.target.value;
@@ -946,6 +994,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     plotXSelect.addEventListener('change', () => autoReplot(false));
     plotYSelect.addEventListener('change', () => autoReplot(false));
+    document.getElementById('plot-y2-select').addEventListener('change', () => autoReplot(false));
     plotTypeSelect.addEventListener('change', () => autoReplot(true));
 
     document.getElementById('btn-check-units').addEventListener('click', () => {
@@ -1268,6 +1317,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!src) return;
             history.push(src); hpos = history.length; input.value = '';
             console.log('> ' + src);
+            if (PlotLines.RE.test(src)) {   // a plot line: drawn from the last Solve
+                const res = currentResults();
+                try { console.log('  ' + drawPlotLine(src, res || new Map())); } catch (err) { console.error(err.message); }
+                if (!res) console.warn('  No current results (press Solve first): only what needs none is drawn.');
+                return;
+            }
             try {
                 const node = quote(math.parse(src));
                 node.traverse((c) => {
