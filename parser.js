@@ -13,6 +13,8 @@ class EESParser {
         this.variables = new Map();
         this.odeCalls = [];
         this.saved = new Map();   // name -> guess, bounds and unit of the last parse that succeeded, kept through parse errors
+        this.uncertain = new Map();   // name -> { u (SI), eq (index in parsedASTs), line, given (as written) }: values given with ±
+        this.plots = [];   // plot lines, { src, lineNo }: drawn from the results after Solve (plots.js), not equations
     }
 
     parse(text) {
@@ -20,6 +22,8 @@ class EESParser {
         this.parsedASTs = [];
         this.odeCalls = [];
         this.variables = new Map();
+        this.uncertain = new Map();
+        this.plots = [];
 
         // Comments are blanked but keep their line breaks, so messages can give line numbers
         let cleanText = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*|\{[^}]*\}/g, (c) => c.replace(/[^\n]/g, ' '));
@@ -62,6 +66,19 @@ class EESParser {
             // Multiple outputs of a user function:  [h2, s2] = steam(T2, P2)  ->  one equation per output
             const multi = line.match(/^\[([^\]]+)\]\s*=\s*([A-Za-z_]\w*)\s*\((.*)\)$/);
             if (multi && UserFunctions.active.has(multi[2])) { this.addMultiCall(multi, line, lineNo); continue; }
+
+            // A plot line, such as  propertyplot('water', 'Ts'): set aside, and drawn after Solve
+            if (/^(propertyplot|contourplot|heatmapplot|surfaceplot)\s*\(/.test(line)) {
+                let node;
+                try { node = math.parse(line); } catch (e) { throw new Error(`Line ${lineNo}: ${e.message} in '${line}'.`); }
+                if (!node.isFunctionNode) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
+                this.plots.push({ src: line, lineNo });
+                continue;
+            }
+            // A given value with its uncertainty:  T_1 = 300 [K] +- 2 [K]  ->  T_1 = 300 [K], and the uncertainty is kept
+            const unc = EESParser.splitUncertainty(line);
+            if (unc) line = unc.head;
+            else if (line.includes('±')) throw new Error(`Line ${lineNo}: ± goes only after a value given as a number, as in  T_1 = 300 [K] ± 2 [K]  or  D = 0.05 [m] ± 1 %.`);
 
             // --- NEW: Extract EES-style inline units (e.g., x = 5 [kJ/kg]) ---
             let inlineUnit = null;
@@ -115,6 +132,7 @@ class EESParser {
 
                 // THE FIX: Added `lineRaw: line` so the Unit Checker can print the equation
                 this.parsedASTs.push({ leftAST, rightAST, vars: Array.from(eqVars), lineRaw: line, lineNo });
+                if (unc) this.addUncertainty(unc, leftAST, lineNo);
             } catch (err) {
                 throw new Error(`Line ${lineNo} ('${line}'): ${err.message}`);
             }
@@ -122,6 +140,34 @@ class EESParser {
         OdeBlocks.active.forEach(blk => this.addOdeBlock(blk));
         this.saved = new Map(this.variables);   // parsed: the store holds just these variables (a failed parse leaves it whole)
         return { equationsCount: this.rawEquations.length, variables: Array.from(this.variables.keys()) };
+    }
+
+    // name = number [unit] +- u, with u a number, a percentage of the value (+- 1 %) or a number with a unit (+- 2 [K]); ± also
+    // works. Only on a line of exactly this form, so that  y = x +- 2  keeps its meaning, x - 2. -> the line without the
+    // uncertainty (head) and its parts, or null.
+    static UNC = /^([A-Za-z_]\w*(?:\[[^\]]*\])?)\s*=\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(?:\s*\[([^\]]*)\])?\s*(?:\+-|±)\s*((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(%|\[[^\]]*\])?\s*$/;
+    static splitUncertainty(line) {
+        const m = String(line).trim().match(EESParser.UNC);
+        if (!m) return null;
+        const unit = m[3] !== undefined ? m[3].trim() : '';
+        return { name: m[1], value: m[2], unit, u: m[4], tail: m[5] === undefined ? '' : m[5] === '%' ? '%' : m[5].slice(1, -1).trim(),
+            head: `${m[1]} = ${m[2]}${m[3] !== undefined ? ` [${unit}]` : ''}` };
+    }
+    // The uncertainty in SI. Without a unit of its own it is in the unit of the value; a percentage is of the value as written.
+    // Both are differences, so for degC and degF only the size of the degree counts.
+    addUncertainty(unc, leftAST, lineNo) {
+        const name = leftAST.isSymbolNode ? leftAST.name : leftAST.toString(), x = Number(unc.value), u = Number(unc.u);
+        const delta = (a, b, unit) => Math.abs(UnitConv.toSI(a, unit) - UnitConv.toSI(b, unit));
+        let si;
+        if (unc.tail === '%') si = delta(x * (1 + u / 100), x, unc.unit);
+        else if (unc.tail) {
+            if (!UnitConv.isValid(unc.tail)) throw new Error(`unit '${unc.tail}' of the uncertainty is not recognized by math.js.`);
+            const D = UnitConsistencyChecker;
+            if (unc.unit && !D.same(D.mk(D.dimsOfUnit(unc.unit)), D.mk(D.dimsOfUnit(unc.tail))))
+                throw new Error(`the uncertainty of ${name} is in ${unc.tail}, which is not a unit of the same kind as ${unc.unit}.`);
+            si = delta(u, 0, unc.tail);
+        } else si = delta(x + u, x, unc.unit);
+        this.uncertain.set(name, { u: si, eq: this.parsedASTs.length - 1, line: lineNo, given: unc.tail === '%' ? `${unc.u} %` : `${unc.u}${unc.tail ? ` [${unc.tail}]` : unc.unit ? ` [${unc.unit}]` : ''}` });
     }
 
     // An ode block gives one equation per state:  T = ode#k:T(inputs...), the value of T at the end
@@ -229,7 +275,8 @@ class EESParser {
                 return;
             }
             if (/^(function|ode\s+[A-Za-z_]\w*\s*=|duplicate)\b/.test(t)) { skip = 1; depth = 0; return; }
-            const m = t.match(/^([A-Za-z_]\w*)\s*=\s*([^=]+?)(?:\s+\[([^\]]*)\])?\s*$/);
+            const unc = EESParser.splitUncertainty(t);
+            const m = (unc ? unc.head : t).match(/^([A-Za-z_]\w*)\s*=\s*([^=]+?)(?:\s+\[([^\]]*)\])?\s*$/);
             if (m && !/[<>!]$/.test(m[2])) cand.push(m);
         });
         for (let pass = 0; pass < 10; pass++) {                   // repeat so that  M = N - 1  after  N = 20  works

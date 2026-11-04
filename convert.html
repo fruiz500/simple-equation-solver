@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<!-- Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+     SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE. -->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EES to SES converter</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        body { padding: 10px; }
+        .cv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .cv-grid textarea { width: 100%; height: 50vh; font-family: monospace; font-size: 13px; box-sizing: border-box; }
+        .cv-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+        #cv-report { font-size: 13px; max-height: 30vh; overflow: auto; }
+        #cv-report li.check, #cv-report li.unsupported { color: #a33; }
+        #cv-report li.changed { color: #555; }
+        #cv-msg { font-size: 13px; }
+    </style>
+</head>
+<body>
+    <h2 style="margin: 0 0 4px;">EES to SES converter</h2>
+    <p style="margin: 0; font-size: 13px;">Paste the equations of an EES program on the left (in EES: select all in the Equations window and copy), choose the unit system the program was written in (a <code>$UnitSystem</code> line in the text overrides it), and press Convert. Read the report, then send the result to SES. See <a href="help.html#convert" target="_blank" rel="noopener">Help</a>.</p>
+    <div class="cv-bar">
+        <label>Temperature <select id="cv-T"><option>C</option><option>K</option><option>F</option><option>R</option></select></label>
+        <label>Pressure <select id="cv-P"><option>kPa</option><option>Pa</option><option>bar</option><option>MPa</option><option>psia</option><option>atm</option></select></label>
+        <label>Energy <select id="cv-E"><option>kJ</option><option>J</option><option>Btu</option></select></label>
+        <label>Angles <select id="cv-trig"><option value="deg">Degrees</option><option value="rad">Radians</option></select></label>
+        <button id="cv-go">Convert</button>
+        <button id="cv-send" class="green" title="Put the SES equations in the Equations pane of the SES window that opened this one">Send to SES</button>
+        <button id="cv-copy" class="secondary">Copy</button>
+        <span id="cv-msg"></span>
+    </div>
+    <div class="cv-grid">
+        <textarea id="cv-in" spellcheck="false" placeholder="EES equations"></textarea>
+        <textarea id="cv-out" spellcheck="false" placeholder="SES equations"></textarea>
+    </div>
+    <h3 style="margin: 8px 0 4px;">Report</h3>
+    <ul id="cv-report"></ul>
+    <script src="thermo.js"></script>
+    <script src="solids.js"></script>
+    <script src="correlations.js"></script>
+    <script src="units.js"></script>
+    <script src="userfunctions.js"></script>
+    <script src="ode.js"></script>
+    <script src="parser.js"></script>
+    <script src="solver.js"></script>
+    <script src="convert.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id), msg = (t) => { $('cv-msg').textContent = t; };
+        const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        $('cv-go').addEventListener('click', () => {
+            try {
+                const r = EESConvert.run($('cv-in').value, { T: $('cv-T').value, P: $('cv-P').value, E: $('cv-E').value, trig: $('cv-trig').value });
+                r.text = EESConvert.units(r);
+                $('cv-out').value = r.text;
+                const order = { unsupported: 0, check: 1, changed: 2 };
+                const list = r.report.slice().sort((a, b) => order[a.kind] - order[b.kind] || a.line - b.line);
+                $('cv-report').innerHTML = list.length ? list.map(x => `<li class="${x.kind}">${x.line ? 'Line ' + x.line + ': ' : ''}<b>${x.kind}</b>: ${esc(x.msg)}</li>`).join('') : '<li>Nothing to report.</li>';
+                const n = (k) => r.report.filter(x => x.kind === k).length;
+                msg(`Converted. ${n('unsupported')} not supported, ${n('check')} to check, ${n('changed')} changes (line numbers are those of the SES text).`);
+            } catch (e) { msg('Error: ' + e.message); }
+        });
+        $('cv-send').addEventListener('click', () => {
+            const t = $('cv-out').value;
+            if (!t.trim()) { msg('Convert first.'); return; }
+            if (window.opener && !window.opener.closed) { window.opener.postMessage({ sesImport: t }, '*'); msg('Sent to SES (switch to its window).'); }
+            else { navigator.clipboard && navigator.clipboard.writeText(t); msg('No SES window opened this page: the equations were copied; paste them into SES.'); }
+        });
+        $('cv-copy').addEventListener('click', () => { navigator.clipboard.writeText($('cv-out').value).then(() => msg('Copied.'), () => msg('Copy failed: select the text and copy it.')); });
+    </script>
+</body>
+</html>

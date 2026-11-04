@@ -58,6 +58,7 @@
                 <button id="btn-load" class="secondary" title="Open equations from a text file">Open...</button>
                 <button id="btn-save" class="secondary" title="Save the equations to a text file">Save...</button>
                 <button id="btn-find" class="secondary" title="Find and replace in the equations (Ctrl+F, Ctrl+H)">Find...</button>
+                <button id="btn-ees" class="secondary" title="Convert an EES program to SES equations (opens the converter)">From EES...</button>
                 <button id="btn-format" class="secondary" title="Show the equations formatted, with subscripts, fractions and Greek letters (display only); click again to edit">Formatted</button>
                 <input type="file" id="file-load" style="display:none">
                 <button id="btn-help" class="teal" title="Open the help page in a new tab" style="order: 99; margin-left: auto;"
@@ -71,7 +72,9 @@
                 <h2>Variables</h2>
                 <label style="margin-left:auto; margin-right:10px; display:flex; align-items:center; gap:3px; cursor:pointer;"
                     title="After each Solve, Min/Max or table row, the solution becomes the guesses, so the next solve starts from it">
-                    <input type="checkbox" id="update-guesses"> Update guesses</label><button id="btn-export" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
+                    <input type="checkbox" id="update-guesses"> Update guesses</label><label style="margin-right:10px; display:flex; align-items:center; gap:3px; cursor:pointer;"
+                    title="After each Solve, propagate the uncertainties given with ± in the equations (two more solves per uncertain value)">
+                    <input type="checkbox" id="uncertainty"> Uncertainty</label><button id="btn-export" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
                     title="Export the results to a text file">Export...</button>
             </div>
             <div id="variables-container"></div>
@@ -120,6 +123,7 @@
                 style="margin-top: 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                 <label title="Column for the horizontal axis">X: <select id="plot-x-select"></select></label>
                 <label title="Column for the vertical axis">Y: <select id="plot-y-select"></select></label>
+                <label title="A second column, on its own vertical axis on the right">Y2: <select id="plot-y2-select"><option value="">(none)</option></select></label>
                 <label title="How the points are drawn">Type:
                     <select id="plot-type-select">
                         <option value="lines+markers">Line + Markers</option>
@@ -261,6 +265,7 @@
     <script src="parser.js"></script>
     <script src="solver.js"></script>
     <script src="eqformat.js"></script>
+    <script src="plots.js"></script>
     <script src="ui.js"></script>
 </body>
 

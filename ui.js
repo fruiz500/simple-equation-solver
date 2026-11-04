@@ -333,10 +333,54 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Uncertainty box (off at every visit): after each Solve, the uncertainties given with ± are propagated (Uncertainty in
+    // solver.js). The result is kept with the text that produced it, like lastResults.
+    const uncBox = document.getElementById('uncertainty');
+    let lastUnc = null;
+    const curUnc = () => (lastUnc && sameText(lastUnc.text, editor.value)) ? lastUnc : null;
+    const fmtUnc = (v) => v === 0 ? '0' : v >= 10 ? String(+v.toPrecision(2)) : v >= 1e-3 ? v.toPrecision(2) : v.toExponential(1);   // two significant digits
+    const dispDelta = (unit, si) => Math.abs(UnitConv.fromSI(si, unit) - UnitConv.fromSI(0, unit));   // a difference, in a display unit
+    function runUncertainty(base) {
+        lastUnc = null;
+        try {
+            lastUnc = { text: editor.value, ...Uncertainty.run(parser, base) };
+            console.log('Uncertainties (first order, independent inputs):');
+            displayOrder([...lastUnc.u.keys()]).forEach(n => {
+                const u = lastUnc.u.get(n);
+                if (u > 0) console.log(`  ${n} = ${fmtNum(toDisp(n, base[n]))} ± ${fmtUnc(dispDelta(unitOf(n), u))}${unitTag(n)}`);
+            });
+            lastUnc.warnings.forEach(w => console.warn(w));
+        } catch (e) { lastUnc = null; console.error(e.message); }
+    }
+    uncBox.addEventListener('change', () => {
+        lastUnc = null;
+        const cur = currentResults();
+        if (uncBox.checked && cur) {   // ticked after a solve: propagate now
+            try { parser.parse(editor.value); } catch (e) { console.error(e.message); return; }
+            if (parser.uncertain.size) runUncertainty(Object.fromEntries(cur));
+        }
+        updateVariablesUI(parser.variables);
+    });
+    // Which inputs make up the uncertainty of a variable: their sensitivities and shares of u^2
+    function openUncertainty(name) {
+        const uc = curUnc();
+        if (!uc || !uc.parts.get(name)) return;
+        const parts = uc.parts.get(name).slice().sort((a, b) => b.c - a.c), tot = parts.reduce((s, p) => s + p.c, 0);
+        const uy = unitOf(name), per = (ux) => (uy || ux) ? ` [${uy || '-'}/${ux || '-'}]` : '';
+        document.getElementById('inspector-title').innerText = `Uncertainty of ${name}: ± ${fmtUnc(dispDelta(uy, uc.u.get(name)))}${unitTag(name)}`;
+        document.getElementById('inspector-body').innerHTML = '<table class="matrix-table"><tr><th>Input</th><th>Given ±</th><th>Sensitivity</th><th>Share of u²</th></tr>' +
+            parts.map(p => {
+                const ux = unitOf(p.input), s = p.s * dispDelta(uy, 1) / dispDelta(ux, 1);
+                return `<tr><td>${p.input}</td><td>${fmtUnc(dispDelta(ux, uc.inputs.find(i => i.name === p.input).u))}${unitTag(p.input)}</td><td>${s !== 0 && Math.abs(s) < 1e-3 ? s.toExponential(3) : String(+s.toPrecision(4))}${per(ux)}</td><td>${(100 * p.c / tot).toFixed(1)} %</td></tr>`;
+            }).join('') + '</table>';
+        modal.style.display = 'flex';
+    }
+
     // Render Variables UI Pane
     function updateVariablesUI(variablesMap) {
         variablesContainer.innerHTML = '';
         const table = document.createElement('table');
+        const uc = curUnc(), showUnc = parser.uncertain.size > 0 || !!uc;
 
         table.innerHTML = `<thead><tr style="background:#eee; text-align:left;">
             <th style="padding:4px;" title="Variable name">Var</th>
@@ -344,7 +388,8 @@ document.addEventListener('DOMContentLoaded', () => {
             <th style="padding:4px;" title="Lower bound (blank: none)">Min</th>
             <th style="padding:4px;" title="Upper bound (blank: none)">Max</th>
             <th style="padding:4px;" title="Unit for display and input (blank: SI; the gray text is the unit Check found)">Unit</th>
-            <th style="padding:4px;" title="Result of the last Solve or Min/Max (click a magnifier to see an array)">Value</th></tr></thead><tbody></tbody>`;
+            <th style="padding:4px;" title="Result of the last Solve or Min/Max (click a magnifier to see an array)">Value</th>${showUnc ? `
+            <th style="padding:4px;" title="Uncertainty: gray, given with ± in the equations; black, propagated after Solve with Uncertainty ticked (click it to see where it comes from)">±</th>` : ''}</tr></thead><tbody></tbody>`;
 
         const tbody = table.querySelector('tbody');
         displayOrder([...variablesMap.keys()]).forEach((name) => {
@@ -372,9 +417,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" title="Upper bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${meta.inferredUnit || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input" style="width:100px; text-align:center;"></td>
                 <td class="val" style="padding:2px 4px;">${solvedDisplay}</td>`;
+            if (showUnc) {
+                const g = parser.uncertain.get(name), u = uc && uc.u.get(name), td = document.createElement('td');
+                td.className = 'unc'; td.style.padding = '2px 4px';
+                if (g) { td.classList.add('unc-given'); td.textContent = fmtUnc(dispDelta(unit, g.u)); td.title = `Given in the equations (line ${g.line}): ± ${g.given}`; }
+                else if (u > 0) td.innerHTML = `<span class="clickable-badge" data-unc="${name}" title="Click to see which inputs contribute">${fmtUnc(dispDelta(unit, u))}</span>`;
+                else if (u === 0) td.textContent = '0';
+                tr.appendChild(td);
+            }
             tbody.appendChild(tr);
         });
         variablesContainer.appendChild(table);
+        table.querySelectorAll('[data-unc]').forEach(el => el.addEventListener('click', () => openUncertainty(el.dataset.unc)));
 
         // Edits are entered in the variable's display unit and stored in SI
         table.querySelectorAll('input[data-var]').forEach(input => {
@@ -421,9 +475,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function plotStyleUpdate() {
         const t = PLOT_THEMES[plotStyle.theme];
         const u = { paper_bgcolor: t.paper, plot_bgcolor: t.plot, 'font.color': t.text, 'font.size': plotStyle.font };
-        [['xaxis', plotStyle.logX], ['yaxis', plotStyle.logY]].forEach(([a, log]) => Object.assign(u, {
+        const pc = document.getElementById('plot-container'), axes = [['xaxis', plotStyle.logX], ['yaxis', plotStyle.logY]];
+        if (pc && pc.layout && pc.layout.yaxis2) axes.push(['yaxis2', plotStyle.logY]);   // the second vertical axis (Y2)
+        axes.forEach(([a, log]) => Object.assign(u, {
             [a + '.type']: log ? 'log' : 'linear', [a + '.autorange']: true, [a + '.color']: t.text, [a + '.gridcolor']: t.grid, [a + '.zerolinecolor']: t.zero,
-            [a + '.linecolor']: t.text, [a + '.showline']: true, [a + '.mirror']: true, [a + '.ticks']: 'outside', [a + '.automargin']: true,
+            [a + '.linecolor']: t.text, [a + '.showline']: true, [a + '.mirror']: !(pc && pc.layout && pc.layout.yaxis2), [a + '.ticks']: 'outside', [a + '.automargin']: true,
         }));
         return u;
     }
@@ -431,7 +487,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function warnLogPoints(pc) {
         [['x', plotStyle.logX], ['y', plotStyle.logY]].forEach(([ax, log]) => {
             if (!log) return;
-            const n = pc.data.reduce((s, tr) => s + (tr[ax] || []).filter(v => !(v > 0)).length, 0);
+            const n = pc.data.reduce((s, tr) => s + (tr[ax] || []).filter(v => v !== null && !(v > 0)).length, 0);
             if (n) console.warn(`Log ${ax} axis: ${n} point(s) with ${ax} <= 0 cannot be shown.`);
         });
     }
@@ -455,20 +511,25 @@ document.addEventListener('DOMContentLoaded', () => {
         const yVals = dataArray.map(r => r[yKey]);
 
         // Configure trace type
-        let trace = {
-            x: xVals,
-            y: yVals,
-            name: `${yKey} vs ${xKey}`
+        const style = (tr) => {
+            if (chartType === 'bar') {
+                tr.type = 'bar';
+                tr.marker = { opacity: 0.8 };
+            } else {
+                tr.type = 'scatter';
+                tr.mode = chartType;
+                tr.line = { width: 2, shape: plotStyle.line };
+                tr.marker = { size: 6 };
+            }
+            return tr;
         };
-
-        if (chartType === 'bar') {
-            trace.type = 'bar';
-            trace.marker = { opacity: 0.8 };
-        } else {
-            trace.type = 'scatter';
-            trace.mode = chartType;
-            trace.line = { width: 2, shape: plotStyle.line };
-            trace.marker = { size: 6 };
+        const trace = style({ x: xVals, y: yVals, name: `${yKey} vs ${xKey}` });
+        // Y2: a second column on its own vertical axis, on the right
+        const y2Key = (document.getElementById('plot-y2-select') || {}).value || '';
+        const traces = [trace];
+        if (y2Key && y2Key !== yKey && dataArray[0] && y2Key in dataArray[0]) {
+            traces.push(style({ x: xVals, y: dataArray.map(r => r[y2Key]), name: `${y2Key} vs ${xKey} (right axis)`, yaxis: 'y2' }));
+            if (chartType !== 'bar') traces[1].line.dash = 'dash';
         }
 
         // Layout: axis titles here; colors, text size and axis types come from plotStyle (plotStyleUpdate)
@@ -476,8 +537,13 @@ document.addEventListener('DOMContentLoaded', () => {
             margin: { t: 25, r: 25, l: 50, b: 45 },
             xaxis: { title: headerCell(xKey) },
             yaxis: { title: headerCell(yKey) },
-            showlegend: isOverlay // Enable legend automatically when overlaying traces
+            showlegend: isOverlay || traces.length > 1 // Enable legend automatically when overlaying traces
         };
+        if (traces.length > 1) {
+            layout.yaxis2 = { title: headerCell(y2Key), overlaying: 'y', side: 'right', showgrid: false };
+            layout.margin.r = 60;
+            layout.legend = { x: 0.02, y: 0.98 };
+        }
 
         // Plotly modebar (zoom, pan, reset); its camera button is replaced by Save image, which sets size and format
         // The legend can be dragged anywhere, and a curve renamed by clicking its name in the legend
@@ -490,15 +556,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Handle plot overlay vs fresh plot redraw
         if (isOverlay && container.data && container.data.length > 0) {
-            Plotly.addTraces('plot-container', trace);
-            Plotly.relayout('plot-container', { showlegend: true });   // two curves or more: show which is which
+            Plotly.addTraces('plot-container', traces);
+            const more = { showlegend: true };   // two curves or more: show which is which
+            if (traces.length > 1 && !container.layout.yaxis2) Object.assign(more, { yaxis2: layout.yaxis2, 'margin.r': 60 });
+            Plotly.relayout('plot-container', more);
+            if (traces.length > 1) Plotly.relayout('plot-container', plotStyleUpdate());
         } else {
+            if (plotStyle.saved) {   // after a plot line: the log axes chosen before it
+                Object.assign(plotStyle, plotStyle.saved); plotStyle.saved = null;
+                document.getElementById('plot-logx').checked = plotStyle.logX; document.getElementById('plot-logy').checked = plotStyle.logY;
+            }
             // PURGE FIX: Wipe previous Plotly instance and bindings from DOM element
             Plotly.purge('plot-container');
-            Plotly.newPlot('plot-container', [trace], layout, config);
+            Plotly.newPlot('plot-container', traces, layout, config);
             Plotly.relayout('plot-container', plotStyleUpdate());
         }
         warnLogPoints(container);
+    }
+
+    // A plot line (propertyplot, contourplot, heatmapplot, surfaceplot; plots.js), drawn from a set of results in SI.
+    // It replaces the plot shown; log x and log y follow the diagram (log P on P-h, for example).
+    function drawPlotLine(src, values) {
+        const { sc, units } = PlotLines.scope(values, unitOf);
+        const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units, unc: (curUnc() || {}).u });
+        if (!plotStyle.saved) plotStyle.saved = { logX: plotStyle.logX, logY: plotStyle.logY };   // put back for the next table plot
+        plotStyle.logX = out.logx; plotStyle.logY = out.logy;
+        document.getElementById('plot-logx').checked = out.logx; document.getElementById('plot-logy').checked = out.logy;
+        const pc = document.getElementById('plot-container');
+        Plotly.purge(pc);
+        Plotly.newPlot(pc, out.data, Object.assign({ margin: { t: out.layout.title ? 35 : 25, r: 25, l: 55, b: 45 } }, out.layout),
+            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'] });
+        const st = plotStyleUpdate();
+        if (out.three) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
+        Plotly.relayout(pc, st);
+        return out.note;
+    }
+    function drawPlotLines(list, values) {
+        list.forEach(pl => {
+            try { console.log(`Plot, line ${pl.lineNo}: ${drawPlotLine(pl.src, values)}.`); }
+            catch (err) { console.error(`Plot, line ${pl.lineNo}: ${err.message}`); }
+        });
+        if (list.length > 1) console.log(`${list.length} plot lines: the Plot pane shows the last. Type another one on the command line to show it.`);
     }
 
     // ==========================================
@@ -551,6 +649,11 @@ document.addEventListener('DOMContentLoaded', () => {
             snapshotResults();
             warnOutOfBounds();
             adopt();
+            lastUnc = null;
+            if (parser.uncertain.size) {
+                if (uncBox.checked) runUncertainty(solution);
+                else console.log(`${parser.uncertain.size} given value(s) carry an uncertainty (±); tick Uncertainty in the Variables pane to propagate them.`);
+            }
             updateVariablesUI(parser.variables);
 
             // Auto-plot ODE output if present
@@ -588,8 +691,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const plotData = tb.rows.map(r => Object.fromEntries(tb.cols.map((k, i) => [k, toDisp(k, r[i])])));
                 updatePlotControls(plotData, tb.indep, tb.states[0]);
                 renderPlot(plotData, plotXSelect.value, plotYSelect.value, plotTypeSelect.value, plotOverlayCheck.checked);
-                console.log(`ode block, line ${tb.no}: ${tb.rows.length} output rows (${tb.steps} internal steps); plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
+               console.log(`ode block, line ${tb.no}: ${tb.rows.length} output rows (${tb.steps} internal steps); plotted ${plotYSelect.value} vs ${plotXSelect.value}.`);
             }
+            if (parser.plots.length) drawPlotLines(parser.plots, currentResults());
         } catch (err) {
             console.error("Solver Error: " + err.message);
         }
@@ -809,13 +913,16 @@ document.addEventListener('DOMContentLoaded', () => {
         // Keep the user's current Y choice if it still exists in the new dataset
         const prevY = plotYSelect.value;
         const ySel = keys.includes(prevY) ? prevY : defaultY;
+        const y2Select = document.getElementById('plot-y2-select'), prevY2 = y2Select.value;
 
         plotXSelect.innerHTML = '';
         plotYSelect.innerHTML = '';
+        y2Select.innerHTML = '<option value="">(none)</option>';
 
         keys.forEach(k => {
             plotXSelect.innerHTML += `<option value="${k}" ${k === defaultX ? 'selected' : ''}>${k}</option>`;
             plotYSelect.innerHTML += `<option value="${k}" ${k === ySel ? 'selected' : ''}>${k}</option>`;
+            y2Select.innerHTML += `<option value="${k}" ${k === prevY2 ? 'selected' : ''}>${k}</option>`;
         });
     }
 
@@ -847,8 +954,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Log axes, colors and text size: applied at once to the plot shown
-    document.getElementById('plot-logx').addEventListener('change', (e) => { plotStyle.logX = e.target.checked; applyPlotStyle(); });
-    document.getElementById('plot-logy').addEventListener('change', (e) => { plotStyle.logY = e.target.checked; applyPlotStyle(); });
+    document.getElementById('plot-logx').addEventListener('change', (e) => { plotStyle.logX = e.target.checked; plotStyle.saved = null; applyPlotStyle(); });
+    document.getElementById('plot-logy').addEventListener('change', (e) => { plotStyle.logY = e.target.checked; plotStyle.saved = null; applyPlotStyle(); });
     document.getElementById('plot-theme').addEventListener('change', (e) => { plotStyle.theme = e.target.value; applyPlotStyle(); });
     document.getElementById('plot-line').addEventListener('change', (e) => {
         plotStyle.line = e.target.value;
@@ -887,6 +994,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     plotXSelect.addEventListener('change', () => autoReplot(false));
     plotYSelect.addEventListener('change', () => autoReplot(false));
+    document.getElementById('plot-y2-select').addEventListener('change', () => autoReplot(false));
     plotTypeSelect.addEventListener('change', () => autoReplot(true));
 
     document.getElementById('btn-check-units').addEventListener('click', () => {
@@ -1209,6 +1317,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!src) return;
             history.push(src); hpos = history.length; input.value = '';
             console.log('> ' + src);
+            if (PlotLines.RE.test(src)) {   // a plot line: drawn from the last Solve
+                const res = currentResults();
+                try { console.log('  ' + drawPlotLine(src, res || new Map())); } catch (err) { console.error(err.message); }
+                if (!res) console.warn('  No current results (press Solve first): only what needs none is drawn.');
+                return;
+            }
             try {
                 const node = quote(math.parse(src));
                 node.traverse((c) => {
@@ -1228,6 +1342,18 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     })();
+
+    // The EES converter (convert.html), opened from this page, sends its result back by a message (pages opened from files
+    // cannot call each other directly). Only messages from the converter window opened here are taken.
+    let converterWin = null;
+    document.getElementById('btn-ees').addEventListener('click', () => { converterWin = window.open('convert.html', '_blank'); });
+    window.addEventListener('message', (ev) => {
+        if (!converterWin || ev.source !== converterWin || !ev.data || typeof ev.data.sesImport !== 'string') return;
+        if (editor.value.trim() && !window.confirm('Replace the equations in the Equations pane with the converted ones?')) return;
+        editor.value = ev.data.sesImport;
+        editor.dispatchEvent(new Event('input'));
+        console.log('Equations converted from EES. Check the converter\'s report, then Check and Solve.');
+    });
 
     console.log("Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz. Free software under the GNU General Public License v3 or later, with no warranty; see Help, About.");
 });
