@@ -68,6 +68,12 @@ const { open } = require('../lib/browser.cjs');
   ok('each equation carries its LaTeX for copying', (await pg.$$eval('#formatted-body .fe-eq', es => es.map(e => e.dataset.tex)))[0] === '{h}_{2} = {h}_{1} - \\eta \\cdot \\left({h}_{1} - {h}_{\\mathrm{2s}}\\right)\\quad \\left[\\mathrm{kJ/kg}\\right]', await pg.$$eval('#formatted-body .fe-eq', es => es.map(e => e.dataset.tex)));
   await pg.click('#btn-format');
   ok('Text: back to the editor, text unchanged', !(await pg.$eval('#editor-box', e => e.hidden)) && (await pg.$eval('#formatted', e => e.hidden)) && (await pg.inputValue('#editor')) === fsrc);
+  await pg.fill('#editor', "ode t = 0 : 10\n  y' = -k*y\n  y(0) = 1\nend\nI = integral(y^2, y, 0, 1)"); await pg.click('#btn-format');
+  const fo = await pg.evaluate(() => ({ maths: document.querySelectorAll('#formatted-body math').length, inner: document.querySelectorAll('#formatted-body .fe-eq.fe-in').length,
+    texts: [...document.querySelectorAll('#formatted-body .fe-text')].map(e => e.textContent), indent: getComputedStyle(document.querySelector('#formatted-body .fe-in')).marginLeft,
+    frac: !!document.querySelector('#formatted-body .fe-in mfrac'), sign: /∫/.test(document.getElementById('formatted-body').textContent) }));
+  ok('Formatted ode block: its two lines as indented MathML (dy/dt as a fraction), the header and end as text; the integral sign', fo.maths === 3 && fo.inner === 2 && fo.indent !== '0px' && fo.frac && fo.sign && fo.texts.join('|') === 'ode t = 0 : 10|end', fo);
+  await pg.click('#btn-format');
   ok('no uncaught page errors', app.pageErrors.length === 0, app.pageErrors);
   await app.b.close();
   console.log(`${pass} passed, ${fail} failed`); process.exitCode = fail ? 1 : 0;
