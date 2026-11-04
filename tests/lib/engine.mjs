@@ -18,12 +18,12 @@ const CPmod = (await import(pathToFileURL(path.join(TESTS, 'node_modules/coolpro
 globalThis.window = { CoolProp: await CPmod(), CoolPropReady: true };
 export const CP = globalThis.window.CoolProp;
 
-const files = ['thermo.js', 'solids.js', 'correlations.js', 'units.js', 'userfunctions.js', 'ode.js', 'parser.js', 'solver.js'];
+const files = ['thermo.js', 'solids.js', 'correlations.js', 'units.js', 'userfunctions.js', 'ode.js', 'parser.js', 'solver.js', 'eqformat.js', 'plots.js', 'convert.js'];
 const code = files.map(f => fs.readFileSync(path.join(APP, f), 'utf8')).join('\n');
 export const logs = [];
 const con = { log: (...x) => logs.push(x.join(' ')), error: (...x) => logs.push('ERROR: ' + x.join(' ')), warn: (...x) => logs.push('WARN: ' + x.join(' ')) };
 export const E = new Function('console', code +
-  '\nreturn { EESParser, BoundedSolver, UnitConsistencyChecker, UserFunctions, UnitConv, OdeBlocks, OdeIntegrator, OptimizerND, Optimizer1D, Solids, SOLIDS_DB, Corr, CORRELATIONS, Interp: typeof Interp !== "undefined" ? Interp : null, Quadrature: typeof Quadrature !== "undefined" ? Quadrature : null };')(con);
+  '\nreturn { EESParser, BoundedSolver, UnitConsistencyChecker, UserFunctions, UnitConv, OdeBlocks, OdeIntegrator, OptimizerND, Optimizer1D, Solids, SOLIDS_DB, Corr, CORRELATIONS, Interp: typeof Interp !== "undefined" ? Interp : null, Quadrature: typeof Quadrature !== "undefined" ? Quadrature : null, EqFormat: typeof EqFormat !== "undefined" ? EqFormat : null, NH3H2O: typeof NH3H2O !== "undefined" ? NH3H2O : null, Uncertainty, PlotLines: typeof PlotLines !== "undefined" ? PlotLines : null, ThermoEngine, Seawater, EESConvert };')(con);
 
 // Parse and solve; guesses = { name: value } set before solving.
 export function run(text, guesses = {}) {
