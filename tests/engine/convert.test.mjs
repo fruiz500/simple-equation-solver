@@ -88,4 +88,8 @@ r = conv(`a = 30\nc = cos(a)\nt = arctan(1)\nh1 = enthalpy(Water, T=100, P=200)\
 st = run(r.text).st;
 ok('trigonometry in degrees: cos(30) = 0.866, arctan(1) = 45', near(st.c, Math.sqrt(3) / 2, 1e-12) && near(st.t, 45, 1e-12));
 ok('a number added to an energy in kJ/kg is reported', has(r, /the number 50 is added to a quantity in kJ\/kg/));
+// ---- convert() and ConvertTemp(): SES converts units itself (regression: they were kept as unknown functions)
+r = conv(`P_1 = 100*convert(kPa, Pa)\nQ = convert(kW, W)*5\nT_2 = ConvertTemp(C, K, T_1) + 10\nT_1 = 300\nc = convert('kJ', 'J')`);
+ok('convert() is dropped (a factor of 1), with a note on the unit of what it multiplied', /^P_1 = 100/m.test(r.text) && /^Q = 5/m.test(r.text) && /^c = 1/m.test(r.text) && has(r, /convert\(kPa, Pa\) dropped.*in kPa/), r.text);
+ok('ConvertTemp(C, K, T) becomes T', /^T_2 = T_1 \+ 10/m.test(r.text), r.text);
 done();

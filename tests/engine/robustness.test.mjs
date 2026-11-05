@@ -21,4 +21,10 @@ for (const [name, txt, guesses, floor] of probs) {
   note(`${name.padEnd(24)} ${n}/${grid.length} converged, ${Date.now() - t0} ms`);
   ok(`${name}: at least ${floor}/${grid.length} converge`, n >= floor, n);
 }
+// ---- regression: a block that fails from the default guess of 1 is retried from typical values (here the quality, from 0.5)
+{
+  const base = `P_5 = 8 [MPa]\nT_5 = 500 [degC]\nP_6 = 10 [kPa]\neta = 0.85\nh_5 = enthalpy('water', T_5, P_5)\ns_5 = entropy('water', T_5, P_5)\nh_6s = enthalpy('water', 'P', P_6, 'S', s_5)\neta = (h_6s - h_5)/(h_6 - h_5)\nh_6 = enthalpy('water', 'P', P_6, 'Q', x_6)`;
+  const st = run(base).st;
+  ok('turbine exit quality found although Newton from x_6 = 1 steps past 1: x_6 = 0.717', Math.abs(st.x_6 - 0.7167) < 1e-3 && Math.abs(st.h_6 - 1906240.45) < 1, [st.x_6, st.h_6]);
+}
 done();
