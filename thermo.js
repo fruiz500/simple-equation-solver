@@ -1617,6 +1617,59 @@ class Solutions {
 // equilibrium compositions and applications, NASA RP-1311, 1994 (Eqs. 2.24 to 2.26, and the step control of Eqs. 3.1 to 3.2):
 //     d ln n_j = -mu_j/RT + sum_i a_ij pi_i + d ln n,   mu_j/RT = g_j/RT + ln(n_j/n) + ln(P/P0)
 // with the pi_i and d ln n from the element balances and the total moles. Gas phase only (no solid carbon).
+// Evaporation from a free water surface into air below the boiling point (a cup, a pool, a reservoir), by the analogy between
+// heat and mass transfer (Incropera et al., Fundamentals of Heat and Mass Transfer, Secs. 6.7 and 9.6; Eqs. 7.31 and 7.38 for
+// a forced flow along the surface, Eqs. 9.30 to 9.32 for free convection over a horizontal surface, with Sh and Sc in place of
+// Nu and Pr). Water vapor and air are ideal gases; the vapor at the surface is saturated at the surface temperature; air
+// properties at the film temperature; D_AB of water vapor in air from Table A.8 (0.26e-4 m^2/s at 298 K, 1 atm), scaled as
+// T^(3/2)/p. The rate includes the blowing of the vapor away from the surface (film theory), which matters for hot water.
+class Evaporation {
+    static OUT = { m: 'kg/(m^2 s)', q: 'W/m^2', h_m: 'm/s', h: 'W/(m^2 K)', sh: '', nu: '', ra: '', re: '', d: 'm^2/s' };
+    static D(T, P) { return 0.26e-4 * (T / 298) ** 1.5 * (101325 / P); }
+    static evaluate(name, a) {
+        const num = ThermoEngine.num, CP = ThermoEngine.CP;
+        if (name === 'diffusivity_h2o_air') {
+            if (a.length !== 2) throw new Error('diffusivity_h2o_air(): use diffusivity_h2o_air(T, P), T in K and P in Pa');
+            return Evaporation.D(num(a[0], 'diffusivity_h2o_air() T'), num(a[1], 'diffusivity_h2o_air() P'));
+        }
+        const use = "evaporation('output', T_s, T_inf, phi, P, L) for free convection, or evaporation('output', T_s, T_inf, phi, P, L, u_inf) for air moving along the surface";
+        if (a.length !== 6 && a.length !== 7) throw new Error(`evaporation(): use ${use}`);
+        const o = String(a[0]).trim().toLowerCase();
+        if (!(o in Evaporation.OUT)) throw new Error(`evaporation(): '${a[0]}' should be one of 'm', 'q', 'h_m', 'h', 'Sh', 'Nu', 'Ra', 'Re', 'D'`);
+        const Ts = num(a[1], 'evaporation() T_s'), Ti = num(a[2], 'evaporation() T_inf'), phi = num(a[3], 'evaporation() phi'), P = num(a[4], 'evaporation() P'), L = num(a[5], 'evaporation() L');
+        const u = a.length === 7 ? num(a[6], 'evaporation() u_inf') : null;
+        if (!(Ts >= 273.16 && Ts <= 373.15) || !(Ti >= 200 && Ti <= 400)) throw new Error(`evaporation(): T_s = ${Ts} K must be 273.16 to 373.15 K (liquid water) and T_inf = ${Ti} K 200 to 400 K`);
+        if (!(phi >= 0 && phi <= 1)) throw new Error(`evaporation(): phi = ${phi} is the relative humidity of the air, 0 to 1`);
+        if (!(L > 0) || (u !== null && !(u > 0))) throw new Error('evaporation(): L and u_inf must be positive');
+        const R = 8.314462618, Mw = 0.018015268, Ma = 0.02896546, psat = (T) => CP.PropsSI('P', 'T', T, 'Q', 0, 'Water');
+        const pvs = psat(Ts), pvi = phi * (Ti >= 273.16 ? psat(Ti) : CP.HAPropsSI('P_w', 'T', Ti, 'P', P, 'R', 1));
+        if (!(pvs < 0.9 * P)) throw new Error(`evaporation(): the water at T_s = ${Ts} K is at or near boiling at P = ${P} Pa; this is evaporation below boiling`);
+        const rv = (pv, T) => pv * Mw / (R * T), rho = (pv, T) => (P - pv) * Ma / (R * T) + rv(pv, T);
+        const rs = rho(pvs, Ts), ri = rho(pvi, Ti), Tf = (Ts + Ti) / 2;
+        const air = (k) => CP.PropsSI(k, 'T', Tf, 'P', P, 'Air'), k = air('L'), nu = air('V') / air('D'), alpha = k / (air('D') * air('C'));
+        const D = Evaporation.D(Tf, P), Sc = nu / D, Pr = nu / alpha;
+        let Sh, Nu, Ra = 0, Re = 0;
+        if (u === null) {   // free convection: the buoyancy of the density difference (temperature and composition together)
+            const drho = (ri - rs) / ((ri + rs) / 2), face = drho >= 0 ? 'hot_up' : 'hot_down', g = 9.80665;
+            Ra = g * Math.abs(drho) * L ** 3 / (nu * D);
+            const Rah = g * Math.abs(drho) * L ** 3 / (nu * alpha), nuh = CORRELATIONS.nu_hplate.f;
+            Sh = Ra > 0 ? nuh(Ra, face) : 0; Nu = Rah > 0 ? nuh(Rah, face) : 0;
+        } else {   // air flowing along the surface, L in the direction of the flow: laminar, or mixed with transition at Re = 5e5
+            Re = u * L / nu;
+            const f = (X) => Re <= 5e5 ? 0.664 * Re ** 0.5 * X ** (1 / 3) : (0.037 * Re ** 0.8 - 871) * X ** (1 / 3);
+            Sh = f(Sc); Nu = f(Pr);
+        }
+        // the evaporation rate with the blowing of the vapor itself (film theory: m = g ln(1 + B), B = (w_s - w_inf)/(1 - w_s),
+        // g = h_m rho; R. B. Bird, W. E. Stewart and E. N. Lightfoot, Transport Phenomena, 2nd ed., Sec. 22.8). At low rates it
+        // is h_m rho (w_s - w_inf); for water at 70 degC in room air the rate is 13 % above that. rho: the mean of the
+        // densities at the surface and far away.
+        const ws = rv(pvs, Ts) / rs, wi = rv(pvi, Ti) / ri, B = (ws - wi) / (1 - ws), rho_m = (rs + ri) / 2;
+        const hm = Sh * D / L, h = Nu * k / L, m = hm * rho_m * (Math.abs(B) < 1e-9 ? B : Math.log1p(B));
+        const out = { m, q: m * CP.PropsSI('H', 'T', Ts, 'Q', 1, 'Water') - m * CP.PropsSI('H', 'T', Ts, 'Q', 0, 'Water'), h_m: hm, h, sh: Sh, nu: Nu, ra: Ra, re: Re, d: D };
+        return out[o];
+    }
+}
+
 class Chem {
     static P0 = 1e5;
     // 'CH4 + 2 (O2 + 3.76 N2)' -> [{ key, n, liquid }]
@@ -1955,6 +2008,8 @@ class ThermoEngine {
         reaction: { key: '', unit: '', kind: 'chem', desc: "Reaction properties at T and 1 bar: reaction('output', 'H2 + 0.5 O2 -> H2O(l)', 'T', T); outputs dH, dS, dG (per reaction as written), lnK, K, and E0 with 'n', electrons" },
         equilibrium: { key: '', unit: '', kind: 'chem', desc: "Chemical equilibrium of ideal gases (Gibbs minimization): equilibrium('output', 'CH4 + 2 (O2 + 3.76 N2)', 'key1', v1, 'key2', v2); keys P and one of T, h, s, Tr (adiabatic from reactants at Tr), optional 'species'; outputs T, P, h, s, u, v, M, N, y_X, n_X" },
         // --- Joule-Thomson coefficient and inversion ---
+        evaporation: { key: '', unit: '', kind: 'evap', desc: "Evaporation from a free water surface into air, below boiling (heat and mass transfer analogy): evaporation('output', T_s, T_inf, phi, P, L) for free convection (L = A/perimeter), or evaporation('output', T_s, T_inf, phi, P, L, u_inf) for air along the surface (L in the flow direction); outputs m (kg/(m^2 s)), q (W/m^2, evaporation heat flux), h_m, h (convection coefficient of the same flow), Sh, Nu, Ra, Re, D" },
+        diffusivity_h2o_air: { key: '', unit: 'm^2/s', kind: 'evap', argUnits: ['K', 'Pa'], desc: "Diffusion coefficient of water vapor in air: diffusivity_h2o_air(T, P), 0.26e-4 m^2/s at 298 K and 1 atm, as T^(3/2)/P" },
         joulethomson: { key: '', unit: 'K/Pa', kind: 'jt', desc: "Joule-Thomson coefficient (dT/dP at constant h) of a CoolProp fluid: joulethomson(fluid, T, P)" },
         inversiontemperature: { key: '', unit: 'K', kind: 'jt', desc: "Joule-Thomson inversion temperature at P: inversiontemperature(fluid, P) for the upper one, or (fluid, P, 'lower')" },
         // --- solutions of a nonvolatile solute, ideal: see the Solutions class ---
@@ -2027,6 +2082,7 @@ class ThermoEngine {
         if (spec.kind === 'sol') return Solutions.evaluate(a);
         if (spec.kind === 'mix') return (name === 'molefraction' || name === 'massfraction') ? Mixtures.convert(name, a) : name === 'pseudocritical' ? Mixtures.pseudo(a) : Mixtures.evaluate(name, a);
         if (spec.kind === 'chem') return name === 'reaction' ? Chem.reaction(a) : Chem.equilibrium(a);
+        if (spec.kind === 'evap') return Evaporation.evaluate(name, a);
         if (spec.kind === 'jt') {
             if (name === 'joulethomson') { if (a.length !== 3) throw new Error('joulethomson(): use joulethomson(fluid, T, P)'); return JouleThomson.mu(a[0], ThermoEngine.num(a[1], 'joulethomson() T'), ThermoEngine.num(a[2], 'joulethomson() P')); }
             if (a.length !== 2 && a.length !== 3) throw new Error("inversiontemperature(): use inversiontemperature(fluid, P) or (fluid, P, 'lower')");

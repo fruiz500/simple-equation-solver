@@ -253,6 +253,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const u = unitOf(name) || (m && m.inferredUnit) || '';
         return u ? `${name} [${u}]` : name;
     }
+    // The SI units Check Units found at the last Solve or Check: kept by name, since other actions parse the equations again
+    // (which makes new variable records), so that the Variables pane can still show them and check typed units against them
+    const inferredKept = new Map();
+    function keepInferred() { inferredKept.clear(); parser.variables.forEach((m, n) => { if (m.inferredUnit) inferredKept.set(n, m.inferredUnit); }); }
+    const inferredOf = (name, meta) => (meta && meta.inferredUnit) || inferredKept.get(name) || '';
     function unitOf(name) { const m = parser.variables.get(name); return (m && UnitConv.isValid(m.unit)) ? (m.unit || '') : ''; }
     function toDisp(name, si) { return (typeof si === 'number' && Number.isFinite(si)) ? UnitConv.fromSI(si, unitOf(name)) : si; }
     function unitTag(name) { const u = unitOf(name); return u ? ` [${u}]` : ''; }
@@ -415,7 +420,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.guess))}" data-var="${name}" data-field="guess" title="Starting value of ${name} for the solver" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.lower))}" placeholder="-inf" data-var="${name}" data-field="lower" title="Lower bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" title="Upper bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
-                <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${meta.inferredUnit || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input" style="width:100px; text-align:center;"></td>
+                <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${inferredOf(name, meta) || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input. Ctrl+D copies it to the next row; Ctrl+Shift+D to every row below with the same dimensions" style="width:100px; text-align:center;"></td>
                 <td class="val" style="padding:2px 4px;">${solvedDisplay}</td>`;
             if (showUnc) {
                 const g = parser.uncertain.get(name), u = uc && uc.u.get(name), td = document.createElement('td');
@@ -430,6 +435,24 @@ document.addEventListener('DOMContentLoaded', () => {
         variablesContainer.appendChild(table);
         table.querySelectorAll('[data-unc]').forEach(el => el.addEventListener('click', () => openUncertainty(el.dataset.unc)));
 
+        // Fill down in the Unit column: Ctrl+D copies the unit to the next row; Ctrl+Shift+D to every row below whose variable
+        // has the same dimensions (as Check Units found them). Rows whose dimensions differ are skipped.
+        const unitInputs = [...table.querySelectorAll('input[data-field="unit"]')];
+        unitInputs.forEach((input, idx) => input.addEventListener('keydown', (e) => {
+            if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'd') return;
+            e.preventDefault();
+            // dimensions from the SI unit shown as each row's placeholder (what Check Units found at the last Solve or Check)
+            const siOf = (name) => { const el = unitInputs.find(t => t.dataset.var === name); return el && el.placeholder && el.placeholder !== '[-]' ? el.placeholder : ''; };
+            const u = input.value.trim(), dims = (name) => { const si = siOf(name); try { return si ? UnitConsistencyChecker.dimsOfUnit(si === '-' ? '' : si).join() : null; } catch (er) { return null; } };
+            if (u !== ((parser.variables.get(input.dataset.var) || {}).unit || '')) input.dispatchEvent(new Event('change'));   // this row first
+            if (u !== ((parser.variables.get(input.dataset.var) || {}).unit || '')) return;   // refused (unknown unit or wrong dimensions)
+            const d0 = dims(input.dataset.var), targets = e.shiftKey ? unitInputs.slice(idx + 1).filter(t => d0 && dims(t.dataset.var) === d0) : unitInputs.slice(idx + 1, idx + 2);
+            let n = 0;
+            targets.forEach(t => { const m = parser.variables.get(t.dataset.var); if (!m || !UnitConv.isValid(u)) return; if (u && d0 && dims(t.dataset.var) && dims(t.dataset.var) !== d0) return; m.unit = u; n++; });
+            if (n) { updateVariablesUI(parser.variables); console.log(`Unit ${u || '(none)'} copied to ${n} variable(s) below.`); }
+            const again = [...variablesContainer.querySelectorAll('input[data-field="unit"]')][e.shiftKey ? idx : idx + 1];
+            if (again) again.focus();
+        }));
         // Edits are entered in the variable's display unit and stored in SI
         table.querySelectorAll('input[data-var]').forEach(input => {
             input.addEventListener('change', (e) => {
@@ -442,6 +465,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.error(`Unit '${raw}' is not recognized by math.js (use e.g. kPa, kJ/(kg K), W/(m^2 K), degC).`);
                         e.target.value = meta.unit || '';
                         return;
+                    }
+                    // the dimensions must be those Check Units found for the variable (its SI unit), when it found them
+                    const si = inferredOf(e.target.getAttribute('data-var'), meta), U = UnitConsistencyChecker;
+                    if (raw && si && si !== '?') {
+                        let ok = true;
+                        try { const a = U.dimsOfUnit(raw === '-' ? '' : raw), b = U.dimsOfUnit(si === '-' ? '' : si); ok = a.every((v, i) => Math.abs(v - (b[i] || 0)) < 1e-9); } catch (err) { ok = true; }
+                        if (!ok) {
+                            console.error(`${e.target.getAttribute('data-var')}: '${raw}' does not fit this variable, whose SI unit is ${si}; the unit was not changed.`);
+                            e.target.value = meta.unit || '';
+                            return;
+                        }
                     }
                     meta.unit = raw;
                     updateVariablesUI(parser.variables);   // redisplay guess/min/max/value in the new unit
@@ -632,7 +666,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             console.log(`System Determinate: ${numActiveEqs} equation(s) and ${numActiveVars} variable(s). Solving...`);
 
-            UnitConsistencyChecker.run(parser.parsedASTs, parser.variables);
+            UnitConsistencyChecker.run(parser.parsedASTs, parser.variables); keepInferred();
             const solver = new BoundedSolver(parser.parsedASTs, parser.variables, parser.odeCalls);
             const solution = solver.solve();
 
@@ -1005,7 +1039,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const nEq = parser.parsedASTs.length;
             console.log(`Syntax OK: ${nEq} equation(s) and ${active.size} variable(s)` +
                 (dof === 0 ? '.' : dof > 0 ? `: ${dof} degree(s) of freedom (fine for Min/Max and Parametric Table, not for Solve).` : `: ${-dof} equation(s) too many.`));
-            UnitConsistencyChecker.run(parser.parsedASTs, parser.variables);
+            UnitConsistencyChecker.run(parser.parsedASTs, parser.variables); keepInferred();
             updateVariablesUI(parser.variables);
         } catch (err) {
             console.error("Check error: " + err.message);

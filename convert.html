@@ -57,9 +57,16 @@
                 $('cv-out').value = r.text;
                 const order = { unsupported: 0, check: 1, changed: 2 };
                 const list = r.report.slice().sort((a, b) => order[a.kind] - order[b.kind] || a.line - b.line);
-                $('cv-report').innerHTML = list.length ? list.map(x => `<li class="${x.kind}">${x.line ? 'Line ' + x.line + ': ' : ''}<b>${x.kind}</b>: ${esc(x.msg)}</li>`).join('') : '<li>Nothing to report.</li>';
+                const outLines = r.text.split('\n');   // each item shows its line of the SES text; a click selects that line
+                $('cv-report').innerHTML = list.length ? list.map(x => `<li class="${x.kind}" data-line="${x.line}" title="${x.line ? 'Click to select this line in the SES text' : ''}" style="${x.line ? 'cursor:pointer' : ''}">${x.line ? '<b>Line ' + x.line + '</b> <code>' + esc((outLines[x.line - 1] || '').trim().slice(0, 90)) + '</code><br>' : ''}<b>${x.kind}</b>: ${esc(x.msg)}</li>`).join('') : '<li>Nothing to report.</li>';
+                $('cv-report').querySelectorAll('li[data-line]').forEach(li => li.addEventListener('click', () => {
+                    const n = +li.dataset.line; if (!n) return;
+                    const ta = $('cv-out'), lines = ta.value.split('\n'), start = lines.slice(0, n - 1).reduce((s, l) => s + l.length + 1, 0);
+                    ta.focus(); ta.setSelectionRange(start, start + (lines[n - 1] || '').length);
+                    ta.scrollTop = Math.max(0, (n - 3) * (parseFloat(getComputedStyle(ta).lineHeight) || 16));
+                }));
                 const n = (k) => r.report.filter(x => x.kind === k).length;
-                msg(`Converted. ${n('unsupported')} not supported, ${n('check')} to check, ${n('changed')} changes (line numbers are those of the SES text).`);
+                msg(`Converted. ${n('unsupported')} not supported, ${n('check')} to check, ${n('changed')} changes. Click an item of the report to see its line in the SES text.`);
             } catch (e) { msg('Error: ' + e.message); }
         });
         $('cv-send').addEventListener('click', () => {
