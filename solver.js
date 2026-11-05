@@ -363,7 +363,47 @@ class BoundedSolver {
     /**
      * Damped Newton method with a finite-difference Jacobian and a Levenberg-Marquardt fallback, for one block
      */
+    // A block whose Newton iteration fails, with unknowns still at the default guess of 1, is tried again from typical values
+    // of those unknowns: a temperature from 300 K, a pressure from 1 bar, an enthalpy from 1e5 J/kg, a quality from 0.5, and so
+    // on. The kind of each unknown comes from the property calls it is an input of ('T', 'P', 'H', ... of the call), or from
+    // the unit Check Units found for it. Guesses set by the user are never changed.
+    static TYPICAL = {
+        T: [300, 500, 800, 250, 1200], P: [1e5, 1e6, 1e4, 1e7, 1e3], H: [1e5, 1e6, 3e6, 3e5, -1e5], U: [1e5, 1e6, 2.5e6, 3e5, -1e5],
+        S: [1e3, 5e3, 7e3, 300, 2e3], Q: [0.5, 0.1, 0.9, 0.01, 0.99], D: [1, 1000, 10, 100, 0.1], V: [1, 1e-3, 0.1, 10, 1e-2],
+    };
+    static UNIT_KIND = { K: 'T', Pa: 'P', 'J/kg': 'H', 'J/(kg K)': 'S', 'kg/m^3': 'D', 'm^3/kg': 'V' };
+    kindOf(v) {
+        if (!this._kinds) {   // once per solve: the property keys each variable is given for
+            this._kinds = new Map();
+            const keyOf = (k) => { const t = String(k).trim(); const u = t.toUpperCase(); return ({ T: 'T', TEMPERATURE: 'T', P: 'P', PRESSURE: 'P', H: 'H', ENTHALPY: 'H', S: 'S', ENTROPY: 'S', U: 'U', INTERNALENERGY: 'U', Q: 'Q', X: 'Q', QUALITY: 'Q', D: 'D', DENSITY: 'D', V: 'V', SPECIFICVOLUME: 'V' })[u]; };
+            this.parsedASTs.forEach(eq => [eq.leftAST, eq.rightAST].forEach(ast => ast.traverse(nd => {
+                if (!nd.isFunctionNode) return;
+                nd.args.forEach((arg, i) => {
+                    if (!(arg.isConstantNode && typeof arg.value === 'string') || i + 1 >= nd.args.length) return;
+                    const kind = keyOf(arg.value), nx = nd.args[i + 1];
+                    if (kind && nx.isSymbolNode && !this._kinds.has(nx.name)) this._kinds.set(nx.name, kind);
+                });
+            })));
+        }
+        if (this._kinds.has(v)) return this._kinds.get(v);
+        const m = this.variablesMap.get(v);
+        return m && BoundedSolver.UNIT_KIND[m.inferredUnit];
+    }
     solveSimultaneousBlock(eqIndices, vars, state) {
+        const start = vars.map(v => state[v]);
+        try { return this.solveSimultaneousBlockOnce(eqIndices, vars, state); }
+        catch (first) {
+            const retry = vars.map((v, k) => { const m = this.variablesMap.get(v); return start[k] === 1 && (!m || m.guess === 1) ? this.kindOf(v) : null; });
+            if (!retry.some(Boolean)) throw first;
+            for (let c = 0; c < 5; c++) {
+                vars.forEach((v, k) => { state[v] = retry[k] ? BoundedSolver.TYPICAL[retry[k]][c] : start[k]; });
+                try { return this.solveSimultaneousBlockOnce(eqIndices, vars, state); } catch (e) { /* the next set of starting values */ }
+            }
+            vars.forEach((v, k) => { state[v] = start[k]; });
+            throw first;
+        }
+    }
+    solveSimultaneousBlockOnce(eqIndices, vars, state) {
         const n = vars.length;
         if (eqIndices.length !== n) {
             throw new Error(`Coupled block is not square: ${eqIndices.length} equation(s), ${n} unknown(s) [${vars.join(', ')}]. Check for a missing or redundant equation.`);

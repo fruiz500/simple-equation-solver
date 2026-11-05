@@ -128,7 +128,12 @@ class EESConvert {
             }
             out.push(this.name(k.v));
         }
-        return out.join('');
+        return EESConvert.dropOnes(out.join(''));
+    }
+    // a dropped convert(): remove '* \u0002', '\u0002 *' and '/ \u0002'; alone it is 1
+    static dropOnes(t) {
+        if (!t.includes('\u0002')) return t;
+        return t.replace(/\s*[*/]\s*\u0002/g, '').replace(/\u0002\s*\*\s*/g, '').replace(/\u0002/g, '1');
     }
     // a function call
     call(orig, low, args) {
@@ -143,6 +148,16 @@ class EESConvert {
             const fl = this.fluid(args[0]);
             if (fl.kind === 'ig' && low === 'molarmass') return `ig_molarmass(${fl.name})`;
             return `${EESConvert.CONSTPROP[low]}(${fl.name})`;
+        }
+        if (low === 'convert') {   // a unit-conversion factor: SES converts units itself, so the factor is 1 (and dropped)
+            const from = args.length ? EESConvert.text(args[0]).replace(/^'|'$/g, '') : '';
+            this.note('check', `${orig}(${args.map(EESConvert.text).join(', ')}) dropped: SES converts units by itself. What it multiplied is in ${from}: make sure SES knows that unit (a unit tag on the number's line)`);
+            return '\u0002';
+        }
+        if (low === 'converttemp' && args.length === 3) {   // ConvertTemp(C, K, T): T, since SES temperatures are absolute already
+            this.note('changed', `${orig}(${args.map(EESConvert.text).join(', ')}) replaced by its temperature: SES converts units by itself`);
+            const t = this.expr(args[2]).trim();
+            return /^[\w.\[\]]+$/.test(t) ? t : '(' + t + ')';
         }
         if (low === 'if' && args.length === 5) {   // IF(A, B, X, Y, Z): X if A < B, Y if A = B, Z if A > B
             const [a, b, x, y, z] = plain();

@@ -372,6 +372,10 @@ class UnitConsistencyChecker {
                     const u = o === null ? undefined : /^(x|xl|yv|phil|phiv|gamma)\d+$/.test(o) ? '' : /^f\d+$/.test(o) ? 'Pa' : U.MIX_DIM[o];
                     return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
                 }
+                if (tspec.kind === 'evap' && name === 'evaporation') {   // the unit of the output named first
+                    const k0 = node.args[0], u = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? (typeof Evaporation !== 'undefined' ? Evaporation.OUT[k0.value.trim().toLowerCase()] : undefined) : undefined;
+                    return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));
+                }
                 if (tspec.kind === 'sea' && name === 'seawater') {   // the unit of the output named first
                     const k0 = node.args[0], u = (k0 && k0.isConstantNode && typeof k0.value === 'string') ? U.SEA_DIM[k0.value.trim().toLowerCase()] : undefined;
                     return u === undefined ? U.UNK : U.mk(U.dimsOfUnit(u));

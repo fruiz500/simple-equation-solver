@@ -88,6 +88,7 @@ class EESParser {
                 line = line.slice(0, unitMatch.index + 1).trim();
             }
 
+            line = EESParser.innerUnits(line, lineNo);   // 100 [kJ/kg] inside an equation: the number in SI
             const eqAt = EESParser.equalsAt(line);
             if (eqAt.length === 0) throw new Error(`Line ${lineNo}: missing '=' sign in '${line}'.`);
             if (eqAt.length > 1) throw new Error(`Line ${lineNo}: more than one '=' in '${line}' (write comparisons as ==, <=, >=, !=).`);
@@ -402,6 +403,22 @@ class EESParser {
         });
     }
 
+    // A number with its unit inside an equation, on either side:  h_2 = h_1 + 100 [kJ/kg]  ->  h_2 = h_1 + 100000. (A unit at
+    // the end of the line has been taken off before.) Offset temperatures (degC, degF) are refused there: in the middle of an
+    // equation it cannot be told whether 10 [degC] is a temperature (283.15 K) or a difference (10 K), except as a whole argument
+    // of a function, where it is a temperature: enthalpy('water', 25 [degC], 1 [atm]).
+    static innerUnits(line, lineNo) {
+        return line.replace(/(?<![\w.$])(\d+\.?\d*(?:[eE][-+]?\d+)?|\.\d+(?:[eE][-+]?\d+)?)\s*\[([^\]\[]+)\]/g, (all, num, unit, at) => {
+            const u = unit.trim();
+            if (/'|"/.test(line.slice(0, at).replace(/'[^']*'|"[^"]*"/g, ''))) return all;   // inside a quoted text
+            const before = line.slice(0, at).trimEnd().slice(-1), after = line.slice(at + all.length).trimStart()[0];
+            const wholeArg = (before === '(' || before === ',') && (after === ',' || after === ')');   // f(25 [degC], ...): a temperature
+            if (!wholeArg && /^(degC|degF|C|F|celsius|fahrenheit)$/i.test(u)) throw new Error(`Line ${lineNo}: '${all}' inside an equation is ambiguous (a temperature or a difference?). Write a difference in K (${num} [K]), or give the temperature on a line of its own.`);
+            if (!UnitConv.isValid(u)) throw new Error(`Line ${lineNo}: unit '${u}' in '${all}' is not recognized (use e.g. kPa, kJ/kg, W/(m^2 K)).`);
+            const si = UnitConv.toSI(Number(num), u);
+            return '(' + String(+si.toPrecision(15)) + ')';
+        });
+    }
     // Positions of the '=' signs that are not part of ==, <=, >=, != (text inside quotes is skipped)
     static equalsAt(s) {
         const at = [];
