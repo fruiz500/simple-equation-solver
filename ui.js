@@ -349,6 +349,11 @@ document.addEventListener('DOMContentLoaded', () => {
         lastUnc = null;
         try {
             lastUnc = { text: editor.value, ...Uncertainty.run(parser, base) };
+            showUncertainty(base);
+        } catch (e) { lastUnc = null; console.error(e.message); }
+    }
+    function showUncertainty(base) {
+        try {
             console.log('Uncertainties (first order, independent inputs):');
             displayOrder([...lastUnc.u.keys()]).forEach(n => {
                 const u = lastUnc.u.get(n);
@@ -362,6 +367,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const cur = currentResults();
         if (uncBox.checked && cur) {   // ticked after a solve: propagate now
             try { parser.parse(editor.value); } catch (e) { console.error(e.message); return; }
+            if (parser.specs.length) { console.log('With spec lines, the uncertainties are propagated at every Solve, ticked or not.'); updateVariablesUI(parser.variables); return; }
             if (parser.uncertain.size) runUncertainty(Object.fromEntries(cur));
         }
         updateVariablesUI(parser.variables);
@@ -668,7 +674,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             UnitConsistencyChecker.run(parser.parsedASTs, parser.variables); keepInferred();
             const solver = new BoundedSolver(parser.parsedASTs, parser.variables, parser.odeCalls);
-            const solution = solver.solve();
+            // spec lines: the design value is found by solving again with the propagated uncertainty (DesignSpec, solver.js)
+            const ds = parser.specs.length ? DesignSpec.solve(parser, BoundedSolver) : null;
+            const solution = ds ? ds.solution : solver.solve();
 
             console.log("Solution Converged:");
             displayOrder(Object.keys(solution)).forEach((varName) => {
@@ -684,7 +692,14 @@ document.addEventListener('DOMContentLoaded', () => {
             warnOutOfBounds();
             adopt();
             lastUnc = null;
-            if (parser.uncertain.size) {
+            if (ds) {
+                lastUnc = { text: editor.value, ...ds.unc };
+                showUncertainty(solution);
+                ds.specs.forEach(sp => {
+                    const d = (n, v) => fmtNum(toDisp(n, v)) + unitTag(n), du = fmtUnc(dispDelta(unitOf(sp.name), sp.u)) + unitTag(sp.name);
+                    console.log(`Spec, line ${sp.lineNo}: ${sp.name} ${sp.op} ${d(sp.name, sp.value)} with probability ${sp.p}: the equations use ${sp.name} = ${d(sp.name, sp.design)}, a margin of ${sp.z.toFixed(3)} × ${du} (the uncertainty of ${sp.name} with ${sp.by} = ${d(sp.by, solution[sp.by])} held fixed; first order, normal; ${ds.passes} passes).`);
+                });
+            } else if (parser.uncertain.size) {
                 if (uncBox.checked) runUncertainty(solution);
                 else console.log(`${parser.uncertain.size} given value(s) carry an uncertainty (±); tick Uncertainty in the Variables pane to propagate them.`);
             }
@@ -743,6 +758,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             // --- REVISED: AST-Level Degree of Freedom & Variable Sweep Lock Check ---
             parser.parse(editor.value);
+            if (parser.specs.length) throw new Error(`Line ${parser.specs[0].lineNo}: spec lines (atleast, atmost) work with Solve only; for a parametric table, write ${parser.specs[0].name} as an ordinary equation.`);
 
             // Collect all variables referenced across parsed AST equations
             const activeVars = new Set();
@@ -828,6 +844,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-optimize').addEventListener('click', () => {
         try {
             parser.parse(editor.value);
+            if (parser.specs.length) { console.error(`Line ${parser.specs[0].lineNo}: spec lines (atleast, atmost) work with Solve only; for Min/Max, write ${parser.specs[0].name} as an ordinary equation.`); return; }
             const vars = displayOrder(Array.from(parser.variables.keys()));
             if (vars.length === 0) { alert("No variables found. Please enter equations first."); return; }
 

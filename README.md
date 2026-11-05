@@ -65,6 +65,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - **Min/Max optimization** of one or more free variables within bounds. It uses BFGS (the default) or Nelder–Mead, with an optional multistart, and Brent's or golden-section search for one variable.
 - **ODE blocks:** initial-value problems solved alongside the algebraic equations. They use adaptive Dormand–Prince 5(4) or, for stiff systems, a linearly implicit extrapolation method. The solver can also solve for an end time that meets a condition.
 - **Uncertainty:** give measured values with their uncertainty, as `T_1 = 400 [degC] +- 1 [K]` or `P_1 = 3000 [kPa] +- 1 %`, and every result gets its uncertainty, by first-order propagation for independent inputs, with each input's share.
+- **Design to a spec with a probability:** `W = atleast(W_spec, 0.95)` (or `atmost`) makes the W used in the equations W_spec plus the margin that meets the spec with that probability (here 1.645 u_W, from the propagated uncertainties of the built design).
 - **Tabulated data:** `interpolate()` in 1-D and 2-D, linear, cubic spline or monotone (pchip), forward or backward, with optional extrapolation and a warning.
 - A console command line for quick calculations, including symbolic `derivative()` and `simplify()`.
 - **Save** and **Open** sessions as plain-text `.ses` files (equations plus variable settings), and export results and tables as tab-separated text that opens in Excel.

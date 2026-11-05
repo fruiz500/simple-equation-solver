@@ -926,12 +926,13 @@ const MathX = (() => {
         if (!real.length) throw new Error("roots(): the polynomial has no real roots; roots(p, 'all') on the console gives the complex ones");
         return out(real);
     };
+    const unitval = (x) => x;   // a number given with its unit inside an equation (parser.innerUnits): already in SI
     const factorialln = (x) => {   // ln(x!) = ln Gamma(x + 1), for numbers too large for factorial(): factorialln(1000) = 5912.128...
         x = num(x, 'factorialln(): n');
         if (!(x >= 0)) throw new Error('factorialln(): n must be 0 or more');
         return gln(x + 1);
     };
-    const fns = { linspace, logspace, trapz, cumtrapz, polyfit, polyval, lsqfit, gammainc, betainc, expint, erfinv, normcdf, norminv, tcdf, tinv, roots, factorialln, regress };
+    const fns = { linspace, logspace, trapz, cumtrapz, polyfit, polyval, lsqfit, gammainc, betainc, expint, erfinv, normcdf, norminv, tcdf, tinv, roots, factorialln, regress, unitval };
     return { fns, names: Object.keys(fns) };
 })();
 if (typeof math !== 'undefined') math.import(MathX.fns, { override: true });
@@ -1019,6 +1020,65 @@ class Uncertainty {
             }
             return { u: new Map([...sq].map(([n, v]) => [n, Math.sqrt(v)])), parts, inputs: done, warnings, base: y0 };
         } finally { console.log = keep.log; console.warn = keep.warn; OdeBlocks.tables = keepTables; }
+    }
+}
+
+// Spec lines: W = atleast(W_spec, p) makes the W of the equations W_spec + margin, the margin chosen so that the real W,
+// spread by the uncertainties of the inputs given with ±, meets W_spec with probability p (atmost: stays below it). The spread
+// is that of the built design: the design variable (named in the line, or found as the only candidate) held at its value.
+// With the first-order (normal) uncertainty u_W of Uncertainty.run, P(W >= W_spec) = normcdf(margin/u_W), so margin =
+// norminv(p) u_W. u_W depends on the design point, so the equations are solved again until the margin settles.
+class DesignSpec {
+    // the variables that could be the design variable of a spec: they share an equation with W, and fixing one of them in
+    // place of the spec equation leaves a square system that can be matched (each equation to its own unknown)
+    static candidates(parser, sp) {
+        const eqs = parser.parsedASTs.filter((e, k) => k !== sp.eq).map(e => e.vars);
+        const near = new Set(); eqs.forEach(vs => { if (vs.includes(sp.name)) vs.forEach(v => near.add(v)); });
+        const inSpec = new Set(parser.parsedASTs[sp.eq].vars);
+        const square = (list) => {
+            const vars = [...new Set(list.flat())];
+            if (vars.length !== list.length) return false;
+            const owner = new Map();
+            const aug = (i, seen) => { for (const v of list[i]) { if (seen.has(v)) continue; seen.add(v); const j = owner.get(v); if (j === undefined || aug(j, seen)) { owner.set(v, i); return true; } } return false; };
+            return list.every((_, i) => aug(i, new Set()));
+        };
+        return [...near].filter(v => !inSpec.has(v) && square([...eqs, [v]]));
+    }
+    static solve(parser, solverClass = BoundedSolver, maxIt = 20) {
+        if (!parser.uncertain.size) throw new Error(`Line ${parser.specs[0].lineNo}: a spec line needs inputs with an uncertainty (given with ±), so that the spread of ${parser.specs[0].name} is known.`);
+        for (const sp of parser.specs) {
+            if (sp.by) continue;
+            const c = DesignSpec.candidates(parser, sp);
+            if (c.length !== 1) throw new Error(`Line ${sp.lineNo}: name the variable held fixed in the built design as the third argument${c.length ? `, one of ${c.join(', ')}` : ''}: ${sp.name} = ${sp.op === '>=' ? 'atleast' : 'atmost'}(..., ..., ${c[0] || 'm_dot'}).`);
+            sp.by = c[0];
+        }
+        const z = (p) => MathX.fns.norminv(p);
+        let guesses = null, sol, unc, last = parser.specs.map(() => 0), values;
+        for (let it = 0; it < maxIt; it++) {
+            const vars = new Map([...parser.variables].map(([n, m]) => [n, { ...m, guess: guesses && typeof guesses[n] === 'number' && Number.isFinite(guesses[n]) ? guesses[n] : m.guess }]));
+            const solver = new solverClass(parser.parsedASTs, vars, parser.odeCalls);
+            solver.tolerance = Uncertainty.TOL;   // tight, so the design value does not depend on the path the solver took
+            try { sol = solver.solve(); } catch (e) { sol = new solverClass(parser.parsedASTs, vars, parser.odeCalls).solve(); }
+            const scope = BoundedSolver.prototype.createScopeWithCoolProp(sol);
+            values = parser.specs.map(sp => sp.valueAST.evaluate(scope));
+            // the spread of the result once built: the design variable fixed at its value, the spec equation left out
+            const asts = parser.parsedASTs.slice();
+            parser.specs.forEach(sp => { const e = asts[sp.eq]; asts[sp.eq] = { ...e, leftAST: new math.SymbolNode(sp.by), rightAST: new math.ConstantNode(sol[sp.by]), vars: [sp.by], code: undefined }; });
+            unc = Uncertainty.run({ parsedASTs: asts, variables: parser.variables, uncertain: parser.uncertain, odeCalls: parser.odeCalls }, sol, solverClass);
+            guesses = sol;
+            const next = parser.specs.map(sp => (sp.op === '>=' ? 1 : -1) * z(sp.p) * (unc.u.get(sp.name) || 0));
+            const settled = next.every((t, k) => Math.abs(t - last[k]) <= 1e-9 * Math.max(Math.abs(values[k]), 1e-300) + 1e-7 * (unc.u.get(parser.specs[k].name) || 0));
+            if (settled) {
+                parser.variables.forEach((m, n) => { if (sol[n] !== undefined) m.value = sol[n]; });
+                return {
+                    solution: sol, unc, passes: it + 1,
+                    specs: parser.specs.map((sp, k) => ({ ...sp, value: values[k], design: sol[sp.name], margin: last[k], u: unc.u.get(sp.name) || 0, z: z(sp.p) })),
+                };
+            }
+            next.forEach((t, k) => { const e = parser.parsedASTs[parser.specs[k].eq]; parser.parsedASTs[parser.specs[k].eq] = { ...e, rightAST: new math.OperatorNode('+', 'add', [e.rightAST.args[0], new math.ConstantNode(t)]), code: undefined }; });
+            last = next;
+        }
+        throw new Error(`Line ${parser.specs[0].lineNo}: the margin of the spec did not settle in ${maxIt} passes (the uncertainty changes too much with the design point).`);
     }
 }
 

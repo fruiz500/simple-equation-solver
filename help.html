@@ -274,6 +274,20 @@ m = 2.5 [kg] +- 0.01              // in the unit of the value</code></pre>
 <li>On a line <i>name</i> = <i>number</i>, +- always means an uncertainty: <code>x = 3 +- 0.1</code> is 3, not 2.9. Elsewhere, as in <code>y = x +- 2</code>, it is ordinary arithmetic.</li>
 </ul>
 
+<h3 id="spec">Designing to a spec with a probability</h3>
+<p>A design that meets a spec exactly, say 1000 kW, falls short about half the time once the real temperatures, pressures and efficiencies scatter around their design values. To meet the spec with probability p (a failure probability 1 - p), the calculation must use a larger value: if the uncertainty of the result is u (one standard deviation, as the Uncertainty box gives it), and its spread is close to normal,</p>
+<pre><code>W = W_spec + norminv(p)*u      // norminv(0.95) = 1.645, norminv(0.99) = 2.326 (one-sided)</code></pre>
+<p>for a quantity that must not fall below the spec, and <code>W_spec - norminv(p)*u</code> for one that must stay below it (a temperature limit, say). By hand: solve with W = W_spec and Uncertainty ticked, read u, set W to that value and solve again; u changes a little with the design point, so repeat once or twice. A <b>spec line</b> does all of it at Solve:</p>
+<pre><code>W_spec = 1000 [kW]
+W = atleast(W_spec, 0.95)      // W, as used in the equations, meets W_spec with probability 0.95
+T_max = atmost(600 [degC], 0.99)</code></pre>
+<ul>
+<li>The spec (W_spec) and the value the equations use (W) are both variables of the problem. The spec line is the equation that fixes W: W = W_spec + margin, the margin norminv(p)·u found at Solve, which repeats until it settles. The Console gives the value used, the margin and the number of passes; the &plusmn; column shows the uncertainties at the design point.</li>
+<li><b>The design variable.</b> Something must change for W to change: the mass flow, an area, a size. It is the quantity you set when you build, and it stays fixed while the inputs given with &plusmn; scatter; the margin comes from that spread. SES finds it when the equations leave one candidate (in the example, the mass flow); otherwise name it as a third argument, <code>W = atleast(W_spec, 0.95, m_dot)</code>, and the message lists the candidates.</li>
+<li>Several spec lines are allowed, each with its own design variable.</li>
+<li>The probability is that of the first-order, normal model of the Uncertainty box: inputs independent, their spread small enough for the result to vary linearly with them. With large uncertainties or far from linear behavior (near a saturation line, say), take the result as an estimate. Spec lines work with Solve, not with parametric tables or Min/Max.</li>
+</ul>
+<p>See the example <a href="#ex-t21">Turbine power with a 95 % probability</a>.</p>
 <h3>Ordinary differential equations</h3>
 <p>Write an <code>ode</code> block. It can hold one equation or several linked ones:</p>
 <pre><code>ode t = 0 : t_end : 60            // independent variable = start : end : output interval
@@ -1006,6 +1020,21 @@ g_b = seawater('g', T, S_b, P_0)
 w_least = rho_p*(g_p + (1/r - 1)*g_b - g_f/r) [kWh/m^3]
 eta_II = w_least/SEC</code></pre><button class="copy" data-copy="ex-t20">Copy</button></div>
   <details open><summary>Result</summary><table class="res"><tbody><tr><td><code>S_b</code></td><td class="num">0.06355045</td><td>-</td></tr><tr><td><code>Pi_f</code></td><td class="num">25.79148</td><td>bar</td></tr><tr><td><code>Pi_b</code></td><td class="num">49.5744</td><td>bar</td></tr><tr><td><code>NDP_out</code></td><td class="num">14.49331</td><td>bar</td></tr><tr><td><code>J_w</code></td><td class="num">28.49555</td><td>L/(m^2 h)</td></tr><tr><td><code>A_m</code></td><td class="num">1462.217</td><td>m^2</td></tr><tr><td><code>SEC</code></td><td class="num">2.557914</td><td>kWh/m^3</td></tr><tr><td><code>w_least</code></td><td class="num">0.9575893</td><td>kWh/m^3</td></tr><tr><td><code>eta_II</code></td><td class="num">0.3743633</td><td>-</td></tr></tbody></table></details></div>
+<div class="example item" id="ex-t21"><h4>Turbine power with a 95 % probability</h4><p>A steam turbine must give at least 1000 kW with a probability of 0.95. The inlet temperature and pressure, the condenser pressure and the turbine efficiency are known only within their uncertainties. The spec line makes the power used in the equations 1000 kW plus 1.645 times its uncertainty, and the mass flow (the design variable, found by SES) follows; <code>m_dot_nominal</code> is the mass flow that would give exactly 1000 kW, and so meet the spec only half the time.</p>
+  <div class="codewrap"><pre><code>T_3 = 550 [degC] +- 5 [K]
+P_3 = 8 [MPa] +- 1 %
+P_4 = 10 [kPa] +- 0.5 [kPa]
+eta_t = 0.85 +- 0.02
+h_3 = enthalpy('water', T_3, P_3) [kJ/kg]
+s_3 = entropy('water', T_3, P_3) [kJ/(kg K)]
+h_4s = enthalpy('water', 'P', P_4, 'S', s_3) [kJ/kg]
+h_4 = h_3 - eta_t*(h_3 - h_4s) [kJ/kg]
+W = m_dot*(h_3 - h_4) [kW]
+W_spec = 1000 [kW]
+W = atleast(W_spec, 0.95)
+m_dot_nominal = W_spec/(h_3 - h_4)
+z = norminv(0.95)</code></pre><button class="copy" data-copy="ex-t21">Copy</button></div>
+  <details open><summary>Result</summary><table class="res"><tbody><tr><td><code>W</code></td><td class="num">1042.175</td><td>kW</td></tr><tr><td><code>m_dot</code></td><td class="num">0.9131545</td><td>kg/s</td></tr><tr><td><code>m_dot_nominal</code></td><td class="num">0.8762008</td><td>kg/s</td></tr><tr><td><code>z</code></td><td class="num">1.644854</td><td>-</td></tr></tbody></table></details></div>
 <h3 id="ex-ht">Heat transfer</h3><div class="example item" id="ex-h1"><h4>Forced convection in a tube (Dittus-Boelter)</h4><p>Water properties at the mean temperature give Re, Pr and the heat-transfer coefficient.</p>
   <div class="codewrap"><pre><code>T_m = 40 [degC]
 P = 200 [kPa]

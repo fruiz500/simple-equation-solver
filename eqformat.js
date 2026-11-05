@@ -61,6 +61,7 @@ const EqFormat = (() => {
         if (n.isConditionalNode) return fn('if', [n.condition, n.trueExpr, n.falseExpr]);
         if (n.isFunctionNode && n.fn.isSymbolNode) {
             const a = n.args, f = n.fn.name;
+            if (f === 'unitval' && a.length === 2) return `<mrow>${ml(a[0])}<mspace width="0.3em"/><mtext>[${esc(String(a[1].value))}]</mtext></mrow>`;
             if (f === 'sqrt' && a.length === 1) return `<msqrt>${ml(strip(a[0]))}</msqrt>`;
             if (f === 'abs' && a.length === 1) return `<mrow><mo>|</mo>${ml(strip(a[0]))}<mo>|</mo></mrow>`;
             if (f === 'integral' && a.length === 4 && strip(a[1]).isSymbolNode) {
@@ -132,6 +133,7 @@ const EqFormat = (() => {
         if (n.isConditionalNode) return tfn('if', [n.condition, n.trueExpr, n.falseExpr]);
         if (n.isFunctionNode && n.fn.isSymbolNode) {
             const a = n.args, f = n.fn.name;
+            if (f === 'unitval' && a.length === 2) return `${tex(a[0])}\\,\\left[\\mathrm{${String(a[1].value).replace(/\s+/g, '\\ ')}}\\right]`;
             if (f === 'sqrt' && a.length === 1) return `\\sqrt{${tex(strip(a[0]))}}`;
             if (f === 'abs' && a.length === 1) return `\\left|${tex(strip(a[0]))}\\right|`;
             if (f === 'integral' && a.length === 4 && strip(a[1]).isSymbolNode) {
@@ -195,10 +197,13 @@ const EqFormat = (() => {
     function equation(line, indep) {
         if (!indep) { const o = ode45(line.trim()); if (o) return o; }
         let text = line.trim(), unit = '';
+        // numbers with their own unit inside the line: shown as written (the unit at the end of the line stays the line's unit)
+        const inner = (t) => t.replace(/(?<![\w.$])(\d+\.?\d*(?:[eE][-+]?\d+)?|\.\d+(?:[eE][-+]?\d+)?)\s*\[([^\]\[]+)\](?!\s*$)/g, (all, num, u) => `unitval(${num}, '${u.trim()}')`);
         const unc = indep ? null : EESParser.splitUncertainty(text);   // T = 300 [K] +- 2  ->  T = 300 ± 2 [K]
         if (unc) text = unc.head;
         const u = text.match(/[^\s=+\-*\/^(,;]\s+\[((?:[a-zA-Z$€£¥]|1\/)[a-zA-Z0-9_$€£¥\/\^\*\s\.\-\(\)]*|-)\]\s*$/);
         if (u) { unit = u[1].trim(); text = text.slice(0, u.index + 1).trim(); }
+        text = inner(text);
         try {
             let Lm, Lt, R, m;
             if (indep && (m = text.match(ODE_D))) {                // y' = f  ->  dy/dt = f
