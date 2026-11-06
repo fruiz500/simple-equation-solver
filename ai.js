@@ -77,7 +77,11 @@ const SESAI = (() => {
 
     // ---- what the model is told ---------------------------------------------------------------------------------------
     // The syntax card. The function lists come from the program itself, so they are always the ones that exist.
-    function systemPrompt() {
+    // Added only when the question is about symbolic work, so that the other questions do not carry it
+    const SYMBOLIC_RE = /deriv|differentiat|integra|antiderivative|symbolic|simplif|identity|prove|expand|factor|closed form/i;
+    const SYMBOLIC = ' SES can differentiate a written-out formula (derivative(expression, x)) and integrate numerically (integral()), but cannot simplify, integrate or solve symbolically: do that yourself, step by step, then give a ses block comparing your result with derivative() or integral() (an identity: both sides) at three or more values, not with a finite difference. Show the differences and say only that they should be near zero, within rounding, with no size. In derivative() the variable is a plain or subscripted name (x, x_1), not x[1]; never name a variable e or pi.';
+    function systemPrompt(question) {
+        const symbolic = SYMBOLIC_RE.test(String(question || '')) ? SYMBOLIC : '';
         const names = (typeof ThermoEngine !== 'undefined' && ThermoEngine.FUNCS) ? Object.keys(ThermoEngine.FUNCS).join(', ') : '';
         let corr = '';
         if (typeof CORRELATIONS !== 'undefined') {
@@ -119,7 +123,7 @@ EQUATION SYNTAX
 - Correlations and other functions, with their arguments (a trailing ? marks an optional one):
 ${corr}
 
-The user may ask about anything: symbolic algebra and calculus, derivations, other engineering and science, mathematics, statistics, programming, or how to use SES. Answer helpfully and do not refuse a question for being outside thermodynamics or heat transfer. SES can differentiate a written-out formula (derivative(expression, x)) and integrate numerically (integral()), but it cannot simplify, integrate or solve symbolically, so do that work yourself, step by step. Then give a ses block that checks your result against SES at three or more values of the variable: for a derivative, compare your formula with derivative(expression, x) (not with a finite difference, whose roundoff hides small errors); for an integral, compare your closed form with integral(); for an algebraic identity, compare both sides. Show the differences, and say only that they should be near zero, within rounding, without quoting a size. Inside derivative() the variable is a plain or subscripted name (x, x_1), not an array element like x[1]; and never name a variable e (it is Euler's number) or pi. The rules above about equation blocks apply only when you propose equations for the Equations pane.`;
+Questions on any subject are welcome (other engineering and science, mathematics, programming, how to use SES): do not refuse one for being outside thermodynamics or heat transfer. The rules above about equation blocks apply only when you propose equations for the Equations pane.${symbolic}`;
     }
 
     // The user turn: the question with the current state of the program.
@@ -313,7 +317,7 @@ The user may ask about anything: symbolic algebra and calculus, derivations, oth
 
         function show(prompt) {
             const o = opts(), P = PROVIDERS[cfg.provider];
-            const sys = systemPrompt(), turn = buildTurn(prompt || '(your question)', deps.context());
+            const sys = systemPrompt(prompt), turn = buildTurn(prompt || '(your question)', deps.context());
             console.log(`Sent to ${P.label}, model ${o.model || '(not chosen)'}, at ${(o.base || '(no address)')}; the key is sent only as the provider's header.\n` +
                 `Conversation so far: ${history.length / 2} exchange(s) (AI: new clears it). A request is the instructions, then the conversation, then the new question with the state:\n\n` +
                 `--- instructions (${sys.length} characters) ---\n${sys}\n\n--- new question ---\n${turn}\n--- end ---`);
@@ -332,7 +336,7 @@ The user may ask about anything: symbolic algebra and calculus, derivations, oth
             const timer = setTimeout(() => { ctl.timedOut = true; ctl.abort(); }, TIMEOUT_MS);
             try {
                 if (!noticed[cfg.provider]) { noticed[cfg.provider] = true; console.log(`The question, the equations, the last results and the latest messages are sent to ${PROVIDERS[cfg.provider].label}. AI: show prints exactly what is sent.`); }
-                const ctx = deps.context(), sys = systemPrompt();
+                const ctx = deps.context(), sys = systemPrompt(prompt);
                 const base = history.concat([{ role: 'user', content: buildTurn(prompt, ctx) }]);
                 let msgs = base, reply, eq = null, chk = null, prevEq = null, round = 0;
                 const settings = {}; (ctx.settingsRaw || []).forEach(s => { settings[s.name] = s; });
