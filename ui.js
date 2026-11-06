@@ -1213,6 +1213,12 @@ document.addEventListener('DOMContentLoaded', () => {
         container.querySelectorAll('.gutter').forEach(g => attach(g, g.classList.contains('gutter-v')));
     })();
 
+    // Phones: the bar at the top jumps to a pane of the stacked column (it is hidden on wider screens; style.css)
+    document.getElementById('pane-jump').addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-pane]'), p = b && document.getElementById(b.dataset.pane);
+        if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
     // --- Files: save/open sessions (.ses) and export results ---
     // A session file is plain text: the equations, then one trailing block comment /*@SESSION ... @*/ holding the variable
     // settings and results (the equation parser ignores it like any comment).
