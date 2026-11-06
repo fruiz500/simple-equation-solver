@@ -68,6 +68,7 @@ The exit code is 1 if any check fails, and each failure is printed as `FAIL name
 | browser/interpolate | `interpolate()` on the console command line, and the warning after Solve |
 | browser/optimize | the Min/Max dialog: ticking free variables, bounds from the Variables pane, messages, Brent for one variable, multistart report |
 | browser/plot | log axes, Light/Dark colors, text size, overlays kept, Save image (PNG pixel size, SVG) |
+| browser/mobile | phone width (390 px): the panes stacked in order (Equations, Variables, Console, Table, Plot), full width, no gutters, no sideways scrolling, the jump bar, sizes left by a gutter drag ignored, Plot title not covered, Solve and a plot that fits; two columns kept at 800 and 1400 px |
 | browser/plotlines | a plot line drawn after Solve and from the command line, log axes set by a diagram and put back after it, failures reported, Y2 axis, contour of a T[i, j] grid, several plot lines, Formatted view, standard plots after Solve and from the command line with console variables, plots of an expression, editable axis titles, Add Note and Clear Notes, text and arrow lines (units, log axes, 3-D refused) |
 | browser/convert | the converter page opened from SES, converting, the report, Send to SES, and solving the result |
 | browser/bignum | the console: bignumber results in full, digits(n), 1000! exactly, roots(p, 'all') with complex roots |
