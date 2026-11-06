@@ -5,8 +5,11 @@
 // A plot line is not an equation: the parser sets it aside, and after Solve it is drawn from the results.
 // PlotLines.build returns the Plotly traces and layout; the UI draws them. Nothing here touches the page.
 class PlotLines {
-    static STD = ['plot', 'semilogx', 'semilogy', 'loglog', 'scatter', 'bar', 'hist', 'errorbar', 'stairs', 'polarplot', 'plot3'];
-    static NAMES = ['propertyplot', 'contourplot', 'heatmapplot', 'surfaceplot', ...PlotLines.STD];
+    static STD = ['plot', 'semilogx', 'semilogy', 'loglog', 'scatter', 'bar', 'hist', 'errorbar', 'stairs', 'polarplot', 'plot3', 'pie', 'area', 'quiver'];
+    static CORE = ['propertyplot', 'contourplot', 'heatmapplot', 'surfaceplot'];   // these names cannot begin an ordinary equation; the Matlab names can
+    static ALIAS = { surf: 'surfaceplot', mesh: 'surfaceplot', contour: 'contourplot', pcolor: 'heatmapplot' };   // Matlab names for the plots of a two-dimensional array
+    static FUN = ['fplot', 'fplot3', 'fsurf', 'fcontour', 'fimplicit', 'fquiver'];   // plots of an expression given as a text, such as fplot('sin(x)', 0, 6)
+    static NAMES = [...PlotLines.CORE, ...Object.keys(PlotLines.ALIAS), ...PlotLines.FUN, ...PlotLines.STD];
     // The name of the plot line if the text is one call of it alone, as in  plot(x, y, 'r--'), else null. (The call must end the
     // text: an equation such as  bar(a) = f(b)  is not a plot line.)
     static isCall(src) {
@@ -101,7 +104,9 @@ class PlotLines {
         const node = math.parse(src.trim());
         const args = node.args.map(a => PlotLines.arg(a, ctx));
         if (fn === 'propertyplot') return PlotLines.property(args, ctx);
-        return PlotLines.STD.includes(fn) ? PlotLines.standard(fn, args, ctx) : PlotLines.grid(fn, args);
+        if (PlotLines.FUN.includes(fn)) return PlotLines.functions(fn, args, ctx);
+        if (PlotLines.STD.includes(fn)) return PlotLines.standard(fn, args, ctx);
+        return PlotLines.grid(PlotLines.ALIAS[fn] || fn, args, fn);
     }
 
     // ---- the standard plots, from arrays (or scalars) given by name or as expressions of the results ----
@@ -199,6 +204,24 @@ class PlotLines {
             if (nums[1]) { bins = Number(nums[1].v); if (!(Number.isInteger(bins) && bins >= 1)) throw new Error(`hist(): the number of bins must be a whole number, 1 or more, not '${nums[1].name}'`); }
             data = [{ type: 'histogram', x: PlotLines.disp(v, a.unit), nbinsx: bins, name: a.name }];
             layout = { xaxis: { title: lab(nameOf(a), a.unit) }, yaxis: { title: 'count' }, showlegend: false };
+        } else if (fn === 'pie') {
+            need(texts.length === 0 && nums.length === 1, 'pie(v), the shares as a list; each slice is labeled with its index');
+            const a = nums[0], v = vec(a, 'v');
+            if (!v.every(x => Number.isFinite(x) && x >= 0) || !(v.reduce((p, q) => p + q, 0) > 0)) throw new Error(`pie(): '${a.name}' must be numbers that are 0 or more, not all 0`);
+            data = [{ type: 'pie', values: PlotLines.disp(v, a.unit), labels: v.map((_, i) => `${a.sym ? a.name : 'v'}[${i + 1}]`), sort: false, textinfo: 'label+percent', name: a.name }];
+            layout = { showlegend: false };
+        } else if (fn === 'area') {
+            need(nums.length >= 1 && nums.length <= 2 && texts.length <= 1, "area(y), area(x, y), optionally with a style such as 'r'; with a matrix Y the columns are stacked");
+            const xa = nums.length === 2 ? nums[0] : null, ya = nums[nums.length - 1];
+            const ser = PlotLines.expand({ xa, ya }, fn), st = style();
+            data = ser.map(s => Object.assign(PlotLines.trace(s.x, s.y, s.name, { color: st.color }), { fill: ser.length > 1 ? 'tonexty' : 'tozeroy', stackgroup: ser.length > 1 ? 'one' : undefined }));
+            layout = { xaxis: { title: xa ? lab(nameOf(xa), xa.unit) : 'index' }, yaxis: { title: lab(nameOf(ya), ya.unit) }, showlegend: data.length > 1 };
+        } else if (fn === 'quiver') {
+            need(nums.length === 4 && texts.length === 0, 'quiver(x, y, u, v), the arrows (u, v) at the points (x, y), all lists of the same length');
+            const [xa, ya, ua, va] = nums, x = vec(xa, 'x'), y = vec(ya, 'y'), u = vec(ua, 'u'), v = vec(va, 'v');
+            same(x, y, xa, ya); same(x, u, xa, ua); same(x, v, xa, va);
+            data = [PlotLines.arrows(PlotLines.disp(x, xa.unit), PlotLines.disp(y, ya.unit), u, v, `(${nameOf(ua) || 'u'}, ${nameOf(va) || 'v'})`)];
+            layout = { xaxis: { title: lab(nameOf(xa), xa.unit) }, yaxis: { title: lab(nameOf(ya), ya.unit) }, showlegend: false };
         } else if (fn === 'errorbar') {
             need(nums.length >= 2 && nums.length <= 3 && texts.length <= 1, "errorbar(x, y, e) with e the error (a list or one number), or errorbar(x, y) from the propagated uncertainties (Uncertainty ticked, y a variable name), and optionally a style such as 'o-'");
             const [xa, ya, ea] = nums, x = vec(xa, 'x'), y = vec(ya, 'y');
@@ -348,18 +371,135 @@ class PlotLines {
 
     // contourplot / heatmapplot / surfaceplot(Z) or (x, y, Z): Z[i][j] is the value at x[i], y[j] (the first index
     // runs along x, as in T[i, j] for a grid of nodes). Without x and y, the indices are used.
-    static grid(fn, args) {
-        const use = `${fn}(Z) or ${fn}(x, y, Z), with Z a two-dimensional array (Z[i, j] at x[i], y[j])`;
-        if (args.length !== 1 && args.length !== 3) throw new Error(`${fn}(): use ${use}`);
+    // Arrows (u, v) at the points (x, y) as one line trace: the longest is 80 % of the mean spacing, the heads are open
+    static arrows(x, y, u, v, name) {
+        const ok = x.map((_, i) => [x[i], y[i], u[i], v[i]].every(Number.isFinite) ? i : -1).filter(i => i >= 0);
+        if (!ok.length) throw new Error('quiver: no finite arrows to draw');
+        const lo = (a) => Math.min(...ok.map(i => a[i])), hi = (a) => Math.max(...ok.map(i => a[i]));
+        const rx = (hi(x) - lo(x)) || 1, ry = (hi(y) - lo(y)) || 1, m = Math.max(...ok.map(i => Math.hypot(u[i], v[i]))) || 1;
+        const L = 0.8 / Math.sqrt(ok.length), c = Math.cos(0.45), sn = Math.sin(0.45), X = [], Y = [];
+        ok.forEach((i) => {
+            const dx = u[i] / m * L, dy = v[i] / m * L, h = 0.3;   // in the plot's own scale: 1 is the width (height) of the data
+            const bx = (x[i] - lo(x)) / rx, by = (y[i] - lo(y)) / ry, tx = bx + dx, ty = by + dy;
+            const hl = [tx - h * (dx * c - dy * sn), ty - h * (dx * sn + dy * c)], hr = [tx - h * (dx * c + dy * sn), ty - h * (-dx * sn + dy * c)];
+            const px = (q) => lo(x) + q * rx, py = (q) => lo(y) + q * ry;
+            X.push(px(bx), px(tx), px(hl[0]), px(tx), px(hr[0]), null); Y.push(py(by), py(ty), py(hl[1]), py(ty), py(hr[1]), null);
+        });
+        return { type: 'scatter', mode: 'lines', x: X, y: Y, name, line: { width: 1.6 } };
+    }
+
+    // Plots of an expression given as a text, evaluated point by point (so x^2 and the other operators need no dots):
+    //   fplot('f(x)', a, b)  fplot('x(t)', 'y(t)', a, b)  fplot3('x(t)', 'y(t)', 'z(t)', a, b)  fsurf('f(x, y)', x0, x1, y0, y1)
+    //   fsurf('x(u, v)', 'y(u, v)', 'z(u, v)', u0, u1, v0, v1)  fcontour('f(x, y)', x0, x1, y0, y1)  fimplicit('f(x, y)', x0, x1, y0, y1)
+    //   fquiver('u(x, y)', 'v(x, y)', x0, x1, y0, y1 [, n]);  a trailing count of points is allowed, and a style after fplot and fplot3
+    static functions(fn, args, ctx) {
+        let i = 0; const ex = [], nm = [];
+        while (i < args.length && args[i].text !== undefined) ex.push(args[i++].text);
+        while (i < args.length && args[i].text === undefined) nm.push(args[i++]);
+        const sty = i < args.length ? args[i++].text : null;
+        const USE = {
+            fplot: "fplot('f(x)', a, b) or, for a curve given by a parameter t, fplot('x(t)', 'y(t)', a, b); optionally the number of points, then a style such as 'r--'",
+            fplot3: "fplot3('x(t)', 'y(t)', 'z(t)', a, b)",
+            fsurf: "fsurf('f(x, y)', x0, x1, y0, y1) or, for a surface given by u and v, fsurf('x(u, v)', 'y(u, v)', 'z(u, v)', u0, u1, v0, v1)",
+            fcontour: "fcontour('f(x, y)', x0, x1, y0, y1)", fimplicit: "fimplicit('f(x, y)', x0, x1, y0, y1), the curve f = 0; 'g(x, y) = h(x, y)' is allowed",
+            fquiver: "fquiver('u(x, y)', 'v(x, y)', x0, x1, y0, y1), optionally the number of arrows along each side",
+        };
+        const bad = () => new Error(`${fn}(): use ${USE[fn]}`);
+        if (i < args.length) throw bad();
+        const nv = nm.map(a => { if (typeof a.v !== 'number' || !Number.isFinite(a.v)) throw new Error(`${fn}(): '${a.name}' must be a number`); return a.v; });
+        const range = (a, b, what) => { if (!(b > a)) throw new Error(`${fn}(): the ${what} range ${a} to ${b} is empty; give the smaller value first`); };
+        const evaluator = (src, vars) => {   // src evaluated at numbers; unusable points (a domain error, a complex number) are gaps
+            let code; const text = String(src);
+            try { code = math.parse(text).compile(); } catch (e) { throw new Error(`${fn}(): '${text}': ${e.message}`); }
+            const sc = Object.assign({}, ctx.scope); let first = null, good = 0, tried = 0;
+            const f = (...vals) => {
+                tried++; vars.forEach((v, k) => { sc[v] = vals[k]; });
+                try { let r = code.evaluate(sc); if (r && r.isUnit) r = r.toSI().toNumber(); if (typeof r === 'number' && Number.isFinite(r)) { good++; return r; } if (!first) first = 'it is not a real number there'; }
+                catch (e) { if (!first) first = e.message; }
+                return null;
+            };
+            f.check = () => { if (tried && !good) throw new Error(`${fn}(): '${text}' gives no number in the range: ${first}`); };
+            return f;
+        };
+        const lin = (a, b, n) => Array.from({ length: n }, (_, k) => a + (b - a) * k / (n - 1));
+        const count = (v, dflt, what) => { if (v === undefined) return dflt; if (!(Number.isInteger(v) && v >= 2 && v <= 2000)) throw new Error(`${fn}(): the number of ${what} must be a whole number from 2 to 2000, not ${v}`); return v; };
+        const style = (d) => sty === null ? d : PlotLines.style(sty, fn);
+        let data, layout, extra = {}, note;
+        if (fn === 'fplot') {
+            if (!(ex.length === 1 || ex.length === 2) || nv.length < 2 || nv.length > 3) throw bad();
+            range(nv[0], nv[1], ex.length === 1 ? 'x' : 't'); const n = count(nv[2], 400, 'points');
+            if (ex.length === 1) {
+                const f = evaluator(ex[0], ['x']), x = lin(nv[0], nv[1], n), y = x.map(v => f(v)); f.check();
+                data = [PlotLines.trace(x, y, ex[0], style({}))]; layout = { xaxis: { title: 'x' }, yaxis: { title: ex[0] }, showlegend: false };
+            } else {
+                const fx = evaluator(ex[0], ['t']), fy = evaluator(ex[1], ['t']), t = lin(nv[0], nv[1], n), x = t.map(v => fx(v)), y = t.map(v => fy(v)); fx.check(); fy.check();
+                data = [PlotLines.trace(x, y, `(${ex[0]}, ${ex[1]})`, style({}))]; layout = { xaxis: { title: ex[0] }, yaxis: { title: ex[1], scaleanchor: 'x' }, showlegend: false };
+            }
+            note = `fplot: ${n} point(s)`;
+        } else if (fn === 'fplot3') {
+            if (ex.length !== 3 || nv.length < 2 || nv.length > 3) throw bad();
+            range(nv[0], nv[1], 't'); const n = count(nv[2], 400, 'points'), t = lin(nv[0], nv[1], n);
+            const fs = ex.map(e => evaluator(e, ['t'])), [x, y, z] = fs.map(f => t.map(v => f(v))); fs.forEach(f => f.check());
+            const tr = PlotLines.trace(x, y, `(${ex.join(', ')})`, style({})); tr.type = 'scatter3d'; tr.z = z;
+            data = [tr]; layout = { scene: { xaxis: { title: ex[0] }, yaxis: { title: ex[1] }, zaxis: { title: ex[2] } }, showlegend: false }; extra = { three: true }; note = `fplot3: ${n} point(s)`;
+        } else if (fn === 'fsurf' && ex.length === 3) {
+            if (nv.length < 4 || nv.length > 5) throw bad();
+            range(nv[0], nv[1], 'u'); range(nv[2], nv[3], 'v'); const n = count(nv[4], 50, 'points along each side'), u = lin(nv[0], nv[1], n), v = lin(nv[2], nv[3], n);
+            const fs = ex.map(e => evaluator(e, ['u', 'v'])), g = (f) => v.map(b => u.map(a => f(a, b)));
+            const [X, Y, Z] = fs.map(g); fs.forEach(f => f.check());
+            data = [{ type: 'surface', x: X, y: Y, z: Z, colorscale: 'Viridis', showscale: false }];
+            layout = { scene: { xaxis: { title: ex[0] }, yaxis: { title: ex[1] }, zaxis: { title: ex[2] } }, showlegend: false }; extra = { three: true }; note = `fsurf: ${n} x ${n} point(s)`;
+        } else if (fn === 'fsurf' || fn === 'fcontour' || fn === 'fimplicit') {
+            if (ex.length !== 1 || nv.length < 4 || nv.length > 5) throw bad();
+            range(nv[0], nv[1], 'x'); range(nv[2], nv[3], 'y');
+            const n = count(nv[4], fn === 'fimplicit' ? 160 : fn === 'fsurf' ? 50 : 80, 'points along each side'), x = lin(nv[0], nv[1], n), y = lin(nv[2], nv[3], n);
+            let src = ex[0];
+            if (fn === 'fimplicit') { const eq = /^([^=<>!]+)=([^=].*)$/.exec(src); if (eq) src = `(${eq[1]}) - (${eq[2]})`; }
+            const f = evaluator(src, ['x', 'y']), z = y.map(b => x.map(a => f(a, b))); f.check();
+            const lbl = { xaxis: { title: 'x' }, yaxis: { title: 'y' }, showlegend: false };
+            if (fn === 'fsurf') { data = [{ type: 'surface', x, y, z, colorscale: 'Viridis', colorbar: { title: { text: ex[0] } } }]; layout = { scene: { xaxis: { title: 'x' }, yaxis: { title: 'y' }, zaxis: { title: ex[0] } }, showlegend: false }; extra = { three: true }; }
+            else if (fn === 'fcontour') { data = [{ type: 'contour', x, y, z, colorscale: 'Viridis', contours: { showlabels: true }, colorbar: { title: { text: ex[0] } } }]; layout = lbl; }
+            else {
+                data = [{ type: 'contour', x, y, z, name: ex[0], showscale: false, autocontour: false, contours: { start: 0, end: 0, size: 1, coloring: 'lines', showlabels: false }, line: { width: 2.5, color: '#1f77b4' }, hoverinfo: 'x+y' }];
+                layout = { xaxis: { title: 'x' }, yaxis: { title: 'y', scaleanchor: 'x' }, showlegend: false };
+            }
+            note = `${fn}: ${n} x ${n} point(s)`;
+        } else {   // fquiver
+            if (ex.length !== 2 || nv.length < 4 || nv.length > 5) throw bad();
+            range(nv[0], nv[1], 'x'); range(nv[2], nv[3], 'y'); const n = count(nv[4], 15, 'arrows along each side');
+            const fu = evaluator(ex[0], ['x', 'y']), fv = evaluator(ex[1], ['x', 'y']), gx = lin(nv[0], nv[1], n), gy = lin(nv[2], nv[3], n), X = [], Y = [], U = [], V = [];
+            gy.forEach(b => gx.forEach(a => { X.push(a); Y.push(b); const uu = fu(a, b), vv = fv(a, b); U.push(uu === null ? NaN : uu); V.push(vv === null ? NaN : vv); }));
+            fu.check(); fv.check();
+            data = [PlotLines.arrows(X, Y, U, V, `(${ex[0]}, ${ex[1]})`)]; layout = { xaxis: { title: 'x' }, yaxis: { title: 'y' }, showlegend: false }; note = `fquiver: ${n} x ${n} arrow(s)`;
+        }
+        return Object.assign({ data, layout, logx: false, logy: false, three: false, polar: false, note }, extra);
+    }
+
+    static grid(fn, args, as) {
+        const nameShown = as || fn, use = `${nameShown}(Z) or ${nameShown}(x, y, Z), with Z a two-dimensional array (Z[i, j] at x[i], y[j])` + (fn === 'surfaceplot' ? `; or ${nameShown}(X, Y, Z) with three arrays of the same size (a parametric surface)` : '');
+        if (args.length !== 1 && args.length !== 3) throw new Error(`${nameShown}(): use ${use}`);
+        const isM = (a) => Array.isArray(a.v) && Array.isArray(a.v[0]);
+        if (fn === 'surfaceplot' && args.length === 3 && isM(args[0]) && isM(args[1]) && isM(args[2])) {   // X[i, j], Y[i, j], Z[i, j]
+            const M = args.map((a, k) => {
+                const v = a.v; if (!v.every(r => Array.isArray(r) && r.length === v[0].length && r.every(x => typeof x === 'number'))) throw new Error(`${nameShown}(): '${a.name}' must be a two-dimensional array of numbers`);
+                return v;
+            });
+            if (M.some(m => m.length !== M[0].length || m[0].length !== M[0][0].length)) throw new Error(`${nameShown}(): X, Y and Z must have the same size`);
+            const T = M.map((m, k) => Array.from({ length: m[0].length }, (_, j) => m.map(r => PlotLines.fromSI(r[j], args[k].unit))));   // Plotly: row = second index
+            const nms = args.map((a, k) => a.sym ? a.name : 'XYZ'[k]), ttl = args.map((a, k) => PlotLines.lab(nms[k], a.unit));
+            const tr = { type: 'surface', x: T[0], y: T[1], z: T[2], colorscale: 'Viridis', colorbar: { title: { text: ttl[2] } } };
+            if (as === 'mesh') Object.assign(tr, { hidesurface: true, contours: { x: { show: true, color: '#333', width: 1 }, y: { show: true, color: '#333', width: 1 } } });
+            return { data: [tr], layout: { scene: { xaxis: { title: ttl[0] }, yaxis: { title: ttl[1] }, zaxis: { title: ttl[2] } }, showlegend: false }, logx: false, logy: false, three: true, note: `${M[0].length} x ${M[0][0].length} values` };
+        }
         const Za = args[args.length - 1], Z = Za.v;
         if (!Array.isArray(Z) || !Array.isArray(Z[0]) || !Z.every(r => Array.isArray(r) && r.length === Z[0].length && r.every(x => typeof x === 'number')))
-            throw new Error(`${fn}(): '${Za.name || 'Z'}' must be a two-dimensional array of numbers; use ${use}`);
+            throw new Error(`${nameShown}(): '${Za.name || 'Z'}' must be a two-dimensional array of numbers; use ${use}`);
         const ni = Z.length, nj = Z[0].length;
-        if (ni < 2 || nj < 2) throw new Error(`${fn}(): '${Za.name}' needs at least 2 values along each index`);
+        if (ni < 2 || nj < 2) throw new Error(`${nameShown}(): '${Za.name}' needs at least 2 values along each index`);
         let x = Array.from({ length: ni }, (_, i) => i + 1), y = Array.from({ length: nj }, (_, j) => j + 1), ux = '', uy = '', nx = 'i', ny = 'j';
         if (args.length === 3) {
             x = PlotLines.numbers(args[0], 'x', fn); y = PlotLines.numbers(args[1], 'y', fn);
-            if (x.length !== ni || y.length !== nj) throw new Error(`${fn}(): '${Za.name}' is ${ni} x ${nj}, so x needs ${ni} values and y ${nj} (it has ${x.length} and ${y.length})`);
+            if (x.length !== ni || y.length !== nj) throw new Error(`${nameShown}(): '${Za.name}' is ${ni} x ${nj}, so x needs ${ni} values and y ${nj} (it has ${x.length} and ${y.length})`);
             ux = args[0].unit; uy = args[1].unit; nx = args[0].sym ? args[0].name : 'x'; ny = args[1].sym ? args[1].name : 'y';
             x = x.map(v => PlotLines.fromSI(v, ux)); y = y.map(v => PlotLines.fromSI(v, uy));
         }
@@ -368,7 +508,7 @@ class PlotLines {
         const tr = { x, y, z, colorscale: 'Viridis', colorbar: { title: { text: zt } } };
         if (fn === 'contourplot') Object.assign(tr, { type: 'contour', contours: { showlabels: true } });
         else if (fn === 'heatmapplot') tr.type = 'heatmap';
-        else tr.type = 'surface';
+        else { tr.type = 'surface'; if (as === 'mesh') { const sp = (v) => ({ show: true, color: '#333', width: 1, start: v[0], end: v[v.length - 1], size: (v[v.length - 1] - v[0]) / (v.length - 1) || 1 }); Object.assign(tr, { hidesurface: true, contours: { x: sp(x), y: sp(y) } }); } }
         const layout = fn === 'surfaceplot'
             ? { scene: { xaxis: { title: lab(nx, ux) }, yaxis: { title: lab(ny, uy) }, zaxis: { title: zt } }, showlegend: false }
             : { xaxis: { title: lab(nx, ux) }, yaxis: { title: lab(ny, uy) }, showlegend: false };

@@ -932,7 +932,22 @@ const MathX = (() => {
         if (!(x >= 0)) throw new Error('factorialln(): n must be 0 or more');
         return gln(x + 1);
     };
-    const fns = { linspace, logspace, trapz, cumtrapz, polyfit, polyval, lsqfit, gammainc, betainc, expint, erfinv, normcdf, norminv, tcdf, tinv, roots, factorialln, regress, unitval };
+    // Matlab names for what math.js has under others, or lacks: find, any, all, eye, numel, flip, cumprod, normpdf
+    const flat = (v) => (v && typeof v.toArray === 'function' ? v.toArray() : Array.isArray(v) ? v : [v]).flat(Infinity);
+    const find = (v) => out(flat(v).map((x, k) => (x ? k + 1 : 0)).filter(k => k > 0));
+    const any = (v) => flat(v).some(x => !!x);
+    const all = (v) => flat(v).every(x => !!x);
+    const eye = (n) => { n = num(n, 'eye(): n'); if (!(Number.isInteger(n) && n >= 1)) throw new Error('eye(): n must be a whole number, 1 or more'); return math.identity(n); };
+    const numel = (v) => flat(v).length;
+    const length = (v) => { const a = v && typeof v.toArray === 'function' ? v.toArray() : v; return Array.isArray(a) ? Math.max(a.length, Array.isArray(a[0]) ? a[0].length : 0) : 1; };
+    const flip = (v) => { const a = v && typeof v.toArray === 'function' ? v.toArray() : v; if (!Array.isArray(a)) throw new Error('flip(): the argument must be an array'); return out(a.slice().reverse()); };   // a vector end to end, a matrix top to bottom
+    const cumprod = (v) => { let p = 1; return out(arr(v, 'cumprod(): the argument').map(x => (p *= x))); };
+    const normpdf = (x, mu = 0, sigma = 1) => {
+        x = num(x, 'normpdf(): x'); mu = num(mu, 'normpdf(): mu'); sigma = num(sigma, 'normpdf(): sigma');
+        if (!(sigma > 0)) throw new Error('normpdf(): sigma must be positive');
+        return Math.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * Math.sqrt(2 * Math.PI));
+    };
+    const fns = { find, any, all, eye, numel, length, flip, cumprod, normpdf, linspace, logspace, trapz, cumtrapz, polyfit, polyval, lsqfit, gammainc, betainc, expint, erfinv, normcdf, norminv, tcdf, tinv, roots, factorialln, regress, unitval };
     return { fns, names: Object.keys(fns) };
 })();
 if (typeof math !== 'undefined') math.import(MathX.fns, { override: true });

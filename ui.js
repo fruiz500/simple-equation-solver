@@ -610,7 +610,7 @@ document.addEventListener('DOMContentLoaded', () => {
             displayModeBar: true,
             responsive: true,
             modeBarButtonsToRemove: ['toImage'],
-            edits: { legendPosition: true, legendText: true }
+            edits: { legendPosition: true, legendText: true, axisTitleText: true }   // click an axis title to retype it
         };
 
         // Handle plot overlay vs fresh plot redraw
@@ -644,7 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const pc = document.getElementById('plot-container');
         Plotly.purge(pc);
         Plotly.newPlot(pc, out.data, Object.assign({ margin: { t: out.layout.title ? 35 : 25, r: 25, l: 55, b: 45 } }, out.layout),
-            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'] });
+            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'], edits: { legendPosition: true, legendText: true, axisTitleText: true } });
         const st = plotStyleUpdate();
         if (out.three || out.polar) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
         Plotly.relayout(pc, st);

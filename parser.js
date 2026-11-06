@@ -80,7 +80,7 @@ class EESParser {
                 try { node = math.parse(line); } catch (e) { throw new Error(`Line ${lineNo}: ${e.message} in '${line}'.`); }
                 if (PlotLines.isCall(line) && node.isFunctionNode) { this.plots.push({ src: line, lineNo }); continue; }
                 // the short Matlab names (plot, bar, ...) may begin an ordinary equation, such as  bar(a) = f(b); the others cannot
-                if (!PlotLines.STD.includes(plotName[1])) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
+                if (PlotLines.CORE.includes(plotName[1])) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
             }
             // A given value with its uncertainty:  T_1 = 300 [K] +- 2 [K]  ->  T_1 = 300 [K], and the uncertainty is kept
             const unc = EESParser.splitUncertainty(line);
