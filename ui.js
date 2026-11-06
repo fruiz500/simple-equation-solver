@@ -635,8 +635,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // A plot line (propertyplot, contourplot, heatmapplot, surfaceplot; plots.js), drawn from a set of results in SI.
     // It replaces the plot shown; log x and log y follow the diagram (log P on P-h, for example).
-    function drawPlotLine(src, values) {
-        const { sc, units } = PlotLines.scope(values, unitOf);
+    function drawPlotLine(src, values, noUnit) {   // noUnit: names (kept on the command line) whose values are plain, in SI
+        const { sc, units } = PlotLines.scope(values, (k) => (noUnit && noUnit.has(k)) ? '' : unitOf(k));
         const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units, unc: (curUnc() || {}).u });
         if (!plotStyle.saved) plotStyle.saved = { logX: plotStyle.logX, logY: plotStyle.logY };   // put back for the next table plot
         plotStyle.logX = out.logx; plotStyle.logY = out.logy;
@@ -646,7 +646,7 @@ document.addEventListener('DOMContentLoaded', () => {
         Plotly.newPlot(pc, out.data, Object.assign({ margin: { t: out.layout.title ? 35 : 25, r: 25, l: 55, b: 45 } }, out.layout),
             { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'] });
         const st = plotStyleUpdate();
-        if (out.three) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
+        if (out.three || out.polar) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
         Plotly.relayout(pc, st);
         return out.note;
     }
@@ -697,15 +697,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const ds = parser.specs.length ? DesignSpec.solve(parser, BoundedSolver) : null;
             const solution = ds ? ds.solution : solver.solve();
 
-            console.log("Solution Converged:");
-            displayOrder(Object.keys(solution)).forEach((varName) => {
-                const val = solution[varName];
-                if (typeof val === 'number') {
-                    const u = unitOf(varName);
-                    console.log(`  ${varName} = ${fmtNum(toDisp(varName, val))}${u ? ' [' + u + ']' : ''}`);
-                }
-                else console.log(`  ${varName} = [Data Structure]`);
-            });
+            // The values are in the Variables pane (as after Min/Max); the Console only confirms, to stay uncluttered
+            console.log(`Solution Converged: ${Object.keys(solution).length} variable(s), in the Variables pane.`);
 
             snapshotResults();
             warnOutOfBounds();
@@ -1459,10 +1452,11 @@ document.addEventListener('DOMContentLoaded', () => {
         function run(src) {
             console.log('> ' + src);
             if (src === '?') { listShortcuts(); return; }
-            if (PlotLines.RE.test(src)) {   // a plot line: drawn from the last Solve
-                const res = currentResults();
-                try { console.log('  ' + drawPlotLine(src, res || new Map())); } catch (err) { console.error(err.message); }
-                if (!res) console.warn('  No current results (press Solve first): only what needs none is drawn.');
+            if (PlotLines.isCall(src)) {   // a plot line: drawn from the last Solve and from what the command line has kept (x = linspace(0, 1, 20))
+                const res = currentResults(), vals = new Map(res || []), mine = new Set();
+                Object.keys(kept).forEach((k) => { const v = kept[k]; if (typeof v !== 'function' && !(v && v.isNode)) { vals.set(k, v); mine.add(k); } });
+                try { console.log('  ' + drawPlotLine(src, vals, mine)); } catch (err) { console.error(err.message); }
+                if (!res && !mine.size) console.warn('  No current results (press Solve first): only what needs none is drawn.');
                 return;
             }
             try {

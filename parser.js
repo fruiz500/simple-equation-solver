@@ -73,13 +73,14 @@ class EESParser {
             // real W meets W_spec with probability 0.95 (atmost: stays below it). DesignSpec (solver.js) sets the margin.
             const specLine = line.match(/^([A-Za-z_]\w*(?:\[[^\]]*\])?)\s*=\s*(atleast|atmost)\s*\((.*)\)\s*$/i);
             if (specLine) { this.addSpec(specLine, line, lineNo); continue; }
-            // A plot line, such as  propertyplot('water', 'Ts'): set aside, and drawn after Solve
-            if (/^(propertyplot|contourplot|heatmapplot|surfaceplot)\s*\(/.test(line)) {
+            // A plot line, such as  propertyplot('water', 'Ts')  or  plot(x, y): set aside, and drawn after Solve (plots.js has the names)
+            const plotName = typeof PlotLines !== 'undefined' ? /^([a-z0-9]+)\s*\(/.exec(line) : null;
+            if (plotName && PlotLines.NAMES.includes(plotName[1])) {
                 let node;
                 try { node = math.parse(line); } catch (e) { throw new Error(`Line ${lineNo}: ${e.message} in '${line}'.`); }
-                if (!node.isFunctionNode) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
-                this.plots.push({ src: line, lineNo });
-                continue;
+                if (PlotLines.isCall(line) && node.isFunctionNode) { this.plots.push({ src: line, lineNo }); continue; }
+                // the short Matlab names (plot, bar, ...) may begin an ordinary equation, such as  bar(a) = f(b); the others cannot
+                if (!PlotLines.STD.includes(plotName[1])) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
             }
             // A given value with its uncertainty:  T_1 = 300 [K] +- 2 [K]  ->  T_1 = 300 [K], and the uncertainty is kept
             const unc = EESParser.splitUncertainty(line);

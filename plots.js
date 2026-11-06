@@ -1,11 +1,27 @@
 // Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
 // SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE.
-// Plot lines in the equations (and on the console): propertyplot, contourplot, heatmapplot, surfaceplot.
+// Plot lines in the equations (and on the console): propertyplot, contourplot, heatmapplot, surfaceplot, and the standard plots
+// of Matlab (plot, semilogx, semilogy, loglog, scatter, bar, hist, errorbar, stairs, polarplot, plot3) from arrays.
 // A plot line is not an equation: the parser sets it aside, and after Solve it is drawn from the results.
 // PlotLines.build returns the Plotly traces and layout; the UI draws them. Nothing here touches the page.
 class PlotLines {
-    static NAMES = ['propertyplot', 'contourplot', 'heatmapplot', 'surfaceplot'];
-    static RE = /^(propertyplot|contourplot|heatmapplot|surfaceplot)\s*\((.*)\)$/s;
+    static STD = ['plot', 'semilogx', 'semilogy', 'loglog', 'scatter', 'bar', 'hist', 'errorbar', 'stairs', 'polarplot', 'plot3'];
+    static NAMES = ['propertyplot', 'contourplot', 'heatmapplot', 'surfaceplot', ...PlotLines.STD];
+    // The name of the plot line if the text is one call of it alone, as in  plot(x, y, 'r--'), else null. (The call must end the
+    // text: an equation such as  bar(a) = f(b)  is not a plot line.)
+    static isCall(src) {
+        const s = String(src).trim(), m = /^([a-z0-9]+)\s*\(/.exec(s);
+        if (!m || !PlotLines.NAMES.includes(m[1])) return null;
+        let depth = 0, q = null;
+        for (let i = m[0].length - 1; i < s.length; i++) {
+            const ch = s[i];
+            if (q) { if (ch === q) q = null; continue; }
+            if (ch === "'" || ch === '"') { q = ch; continue; }
+            if (ch === '(' || ch === '[') depth++;
+            else if (ch === ')' || ch === ']') { depth--; if (depth === 0) return i === s.length - 1 ? m[1] : null; }
+        }
+        return null;
+    }
     // Property diagrams: [vertical, horizontal] quantity, the function giving it on the saturation line, axis defaults
     static DIAGRAMS = {
         Ts: { y: 'T', x: 's', logx: false, logy: false },
@@ -22,12 +38,18 @@ class PlotLines {
     // The results as a scope in SI: scalars by name, and the elements x[1], x[2], ... (or T[1,1], T[1,2], ...) gathered
     // into arrays under the array's name. units[name] is the display unit of a variable or of an array's elements.
     static scope(values, unitOf) {
-        const sc = {}, units = {}, fam = {};
+        const sc = {}, units = {}, fam = {}, sub = {};
         values.forEach((v, k) => {
             const m = /^([A-Za-z_]\w*)\[\s*(\d+)\s*(?:,\s*(\d+)\s*)?\]$/.exec(k);
-            if (!m) { sc[k] = v; units[k] = unitOf(k); return; }
+            if (!m) {
+                sc[k] = v; units[k] = unitOf(k);
+                const q = /^([A-Za-z]\w*?)_(\d+)(?:_(\d+))?$/.exec(k);   // T_1, T_2, ... (or T_1_2) also make the array T when no T[...] exists
+                if (q) (sub[q[1]] = sub[q[1]] || []).push({ i: +q[2], j: q[3] === undefined ? null : +q[3], v, k });
+                return;
+            }
             (fam[m[1]] = fam[m[1]] || []).push({ i: +m[2], j: m[3] === undefined ? null : +m[3], v, k });
         });
+        for (const [name, els] of Object.entries(sub)) if (!(name in fam) && !(name in sc)) fam[name] = els;   // a real array or scalar of that name wins
         for (const [name, els] of Object.entries(fam)) {
             if (name in sc || !els.every(e => typeof e.v === 'number')) continue;   // a scalar of the same name wins
             units[name] = (els.find(e => unitOf(e.k)) || els[0]).k; units[name] = unitOf(units[name]);   // the first element with a display unit
@@ -45,12 +67,21 @@ class PlotLines {
         return { sc, units };
     }
 
+    // Matlab-style: the scalar functions apply to each element of an array, so plot(x, sin(x)) works (use .^ , .* , ./ for the operators).
+    static vectorScope(scope) {
+        const out = Object.assign({}, scope);
+        ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'sinh', 'cosh', 'tanh', 'exp', 'log', 'log10', 'log2', 'sqrt', 'abs', 'sign', 'floor', 'ceil', 'round', 'cbrt', 'erf', 'gamma'].forEach((f) => {
+            const g = typeof scope[f] === 'function' ? scope[f] : (typeof math !== 'undefined' ? math[f] : null); if (typeof g !== 'function') return;
+            out[f] = (v, ...r) => (v && typeof v.map === 'function' && !v.isUnit) ? (v.toArray ? v.toArray() : v).map(function m(e) { return Array.isArray(e) ? e.map(m) : g(e, ...r); }) : g(v, ...r);
+        });
+        return out;
+    }
     static plain(v) { return (v && typeof v.toArray === 'function') ? v.toArray() : v; }
     // An argument: a quoted text, or an expression of the results. A bare name keeps its display unit.
     static arg(node, ctx) {
         if (node.isConstantNode && typeof node.value === 'string') return { text: node.value };
         let v;
-        try { v = PlotLines.plain(node.compile().evaluate(ctx.scope)); }
+        try { v = PlotLines.plain(node.compile().evaluate(PlotLines.vectorScope(ctx.scope))); }
         catch (e) { throw new Error(`'${node.toString()}': ${e.message}`); }
         if (v && v.isUnit) v = v.toSI().toNumber();
         return { v, unit: node.isSymbolNode ? (ctx.units[node.name] || '') : '', name: node.toString(), sym: node.isSymbolNode };
@@ -65,11 +96,146 @@ class PlotLines {
     // Plotly traces and layout for one plot line. ctx = { scope, units } from PlotLines.scope (with the property
     // functions in the scope, as for the equations).
     static build(src, ctx) {
-        const m = PlotLines.RE.exec(src.trim());
-        if (!m) throw new Error(`not a plot line: '${src}'`);
-        const node = math.parse(src.trim()), fn = m[1];
+        const fn = PlotLines.isCall(src);
+        if (!fn) throw new Error(`not a plot line: '${src}'`);
+        const node = math.parse(src.trim());
         const args = node.args.map(a => PlotLines.arg(a, ctx));
-        return fn === 'propertyplot' ? PlotLines.property(args, ctx) : PlotLines.grid(fn, args);
+        if (fn === 'propertyplot') return PlotLines.property(args, ctx);
+        return PlotLines.STD.includes(fn) ? PlotLines.standard(fn, args, ctx) : PlotLines.grid(fn, args);
+    }
+
+    // ---- the standard plots, from arrays (or scalars) given by name or as expressions of the results ----
+    static LINE = { '-': 'solid', '--': 'dash', ':': 'dot', '-.': 'dashdot' };
+    static MARK = { o: 'circle', '+': 'cross', '*': 'star', '.': 'circle', x: 'x', s: 'square', d: 'diamond', '^': 'triangle-up', v: 'triangle-down', '<': 'triangle-left', '>': 'triangle-right', p: 'pentagon', h: 'hexagon' };
+    static COLOR = { r: '#d62728', g: '#2ca02c', b: '#1f77b4', c: '#17becf', m: '#9467bd', y: '#e6b800', k: '#222222', w: '#bbbbbb' };
+    // A style text as in Matlab: a color, a line and a marker, in any of the usual orders ('r--', 'ko', '-.b', 'g+')
+    static style(text, fn) {
+        const m = /^([rgbcmykw])?(--|-\.|-|:)?([o+*.xsd^v<>ph])?([rgbcmykw])?$/.exec(text);
+        if (!text || !m || (m[1] && m[4])) throw new Error(`${fn}(): '${text}' is not a line style: a color (r g b c m y k w), a line (- -- : -.) and a marker (o + * . x s d ^ v < > p h), as in 'r--' or 'ko'`);
+        return { color: PlotLines.COLOR[m[1] || m[4]], line: m[2], marker: m[3] };
+    }
+    static trace(x, y, name, st) {
+        const tr = { type: 'scatter', mode: st.marker ? (st.line ? 'lines+markers' : 'markers') : 'lines', name, x, y };
+        if (st.color) { tr.line = { color: st.color }; tr.marker = { color: st.color }; }
+        if (st.line) tr.line = Object.assign(tr.line || {}, { dash: PlotLines.LINE[st.line] });
+        if (st.marker) tr.marker = Object.assign(tr.marker || {}, { symbol: PlotLines.MARK[st.marker], size: st.marker === '.' ? 4 : 7 });
+        return tr;
+    }
+    // (x, y [, style]) or (y [, style]), repeated: the series of a plot, each with the arguments it came from
+    static pairs(args, fn) {
+        const out = []; let i = 0;
+        while (i < args.length) {
+            if (args[i].text !== undefined) throw new Error(`${fn}(): the style '${args[i].text}' must come after the data it styles, as in ${fn}(x, y, 'r--')`);
+            let xa = null, ya = args[i++];
+            if (i < args.length && args[i].text === undefined) { xa = ya; ya = args[i++]; }
+            let st = {};
+            if (i < args.length && args[i].text !== undefined) st = PlotLines.style(args[i++].text, fn);
+            out.push({ xa, ya, st });
+        }
+        return out;
+    }
+    static disp(a, unit) { return a.map(v => Number.isFinite(v) ? PlotLines.fromSI(v, unit) : null); }
+    // The curves of one (x, y) pair in display units: y a vector, or a matrix whose columns are curves against x (Y[i, j] at x[i])
+    static expand(p, fn) {
+        const { xa, ya } = p, yv = ya.v;
+        const mat = Array.isArray(yv) && Array.isArray(yv[0]);
+        if (mat && !yv.every(r => Array.isArray(r) && r.length === yv[0].length && r.every(v => typeof v === 'number')))
+            throw new Error(`${fn}(): '${ya.name}' must be a number, a list or a two-dimensional array of numbers`);
+        const rows = mat ? yv.length : (Array.isArray(yv) ? yv.length : 1);
+        const cols = mat ? yv[0].length : 1;
+        const xs = xa ? PlotLines.numbers(xa, 'x', fn) : Array.from({ length: rows }, (_, i) => i + 1);
+        if (xs.length !== rows) throw new Error(`${fn}(): '${xa ? xa.name : 'x'}' has ${xs.length} value(s) and '${ya.name}' has ${rows}`);
+        const x = xa ? PlotLines.disp(xs, xa.unit) : xs;
+        const cs = mat ? Array.from({ length: cols }, (_, j) => yv.map(r => r[j])) : [PlotLines.numbers(ya, 'y', fn)];
+        return cs.map((c, j) => ({ x, y: PlotLines.disp(c, ya.unit), name: mat ? `${ya.name}[:,${j + 1}]` : ya.name }));
+    }
+    static nameOf(a) { return a.sym || a.name.length <= 24 ? a.name : ''; }
+    static lab(n, u) { return u ? (n ? `${n} [${u}]` : `[${u}]`) : n; }
+
+    // plot, semilogx, semilogy, loglog, stairs (x, y [, style]), scatter (x, y [, c]), bar (x, y), hist (data [, bins]),
+    // errorbar (x, y [, e]), polarplot (theta, r), plot3 (x, y, z)
+    static standard(fn, args, ctx) {
+        const lab = PlotLines.lab, nameOf = PlotLines.nameOf, nums = args.filter(a => a.text === undefined), texts = args.filter(a => a.text !== undefined);
+        const style = () => texts.length ? PlotLines.style(texts[0].text, fn) : {};
+        const need = (ok, use) => { if (!ok) throw new Error(`${fn}(): use ${use}`); };
+        const vec = (a, what) => PlotLines.numbers(a, what, fn);
+        const same = (a, b, an, bn) => { if (a.length !== b.length) throw new Error(`${fn}(): '${an.name}' has ${a.length} value(s) and '${bn.name}' has ${b.length}`); };
+        const clean = (tr) => tr;
+        let data, layout, extra = {};
+        if (['plot', 'semilogx', 'semilogy', 'loglog', 'stairs'].includes(fn)) {
+            need(args.length > 0, `${fn}(x, y), ${fn}(y), ${fn}(x, Y) with the columns of Y as curves, ${fn}(x1, y1, x2, y2), and a style such as 'r--' or 'o' after any pair`);
+            const prs = PlotLines.pairs(args, fn);
+            data = [];
+            prs.forEach(p => PlotLines.expand(p, fn).forEach(s => {
+                const tr = PlotLines.trace(s.x, s.y, s.name, p.st);
+                if (fn === 'stairs') tr.line = Object.assign(tr.line || {}, { shape: 'hv' });
+                data.push(tr);
+            }));
+            const x0 = prs[0].xa, ys = prs.map(p => p.ya), u0 = ys[0].unit;
+            layout = { xaxis: { title: x0 ? lab(nameOf(x0), x0.unit) : 'index' },
+                yaxis: { title: ys.length === 1 ? lab(nameOf(ys[0]), u0) : (u0 && ys.every(y => y.unit === u0) ? `[${u0}]` : '') }, showlegend: data.length > 1 };
+            extra = { logx: fn === 'semilogx' || fn === 'loglog', logy: fn === 'semilogy' || fn === 'loglog' };
+        } else if (fn === 'scatter') {
+            need(nums.length >= 2 && nums.length <= 3 && texts.length <= 1, 'scatter(x, y), scatter(x, y, c) with c the values that color the points, and optionally a style such as \'r+\'');
+            const [xa, ya, ca] = nums, x = vec(xa, 'x'), y = vec(ya, 'y');
+            same(x, y, xa, ya);
+            const st = style(); st.marker = st.marker || 'o'; st.line = undefined;
+            const tr = PlotLines.trace(PlotLines.disp(x, xa.unit), PlotLines.disp(y, ya.unit), ya.name, st);
+            if (ca) {
+                const c = vec(ca, 'c'); same(x, c, xa, ca);
+                tr.marker = Object.assign(tr.marker || {}, { color: PlotLines.disp(c, ca.unit), colorscale: 'Viridis', showscale: true, size: 8, colorbar: { title: { text: lab(nameOf(ca), ca.unit) } } });
+            }
+            data = [tr]; layout = { xaxis: { title: lab(nameOf(xa), xa.unit) }, yaxis: { title: lab(nameOf(ya), ya.unit) }, showlegend: false };
+        } else if (fn === 'bar') {
+            need(texts.length === 0 && (nums.length === 1 || nums.length === 2), 'bar(y) or bar(x, y); with a matrix Y (Y[i, j] at x[i]) the columns are grouped bars');
+            const xa = nums.length === 2 ? nums[0] : null, ya = nums[nums.length - 1];
+            const ser = PlotLines.expand({ xa, ya }, fn);
+            data = ser.map(s => ({ type: 'bar', x: s.x, y: s.y, name: s.name }));
+            layout = { xaxis: { title: xa ? lab(nameOf(xa), xa.unit) : 'index' }, yaxis: { title: lab(nameOf(ya), ya.unit) }, barmode: 'group', showlegend: data.length > 1 };
+        } else if (fn === 'hist') {
+            need(texts.length === 0 && (nums.length === 1 || nums.length === 2), 'hist(data) or hist(data, bins)');
+            const a = nums[0], v = vec(a, 'data').filter(Number.isFinite);
+            let bins = 10;
+            if (nums[1]) { bins = Number(nums[1].v); if (!(Number.isInteger(bins) && bins >= 1)) throw new Error(`hist(): the number of bins must be a whole number, 1 or more, not '${nums[1].name}'`); }
+            data = [{ type: 'histogram', x: PlotLines.disp(v, a.unit), nbinsx: bins, name: a.name }];
+            layout = { xaxis: { title: lab(nameOf(a), a.unit) }, yaxis: { title: 'count' }, showlegend: false };
+        } else if (fn === 'errorbar') {
+            need(nums.length >= 2 && nums.length <= 3 && texts.length <= 1, "errorbar(x, y, e) with e the error (a list or one number), or errorbar(x, y) from the propagated uncertainties (Uncertainty ticked, y a variable name), and optionally a style such as 'o-'");
+            const [xa, ya, ea] = nums, x = vec(xa, 'x'), y = vec(ya, 'y');
+            same(x, y, xa, ya);
+            let e;
+            if (ea) {
+                const ev = vec(ea, 'e'); if (ev.length !== 1) same(x, ev, xa, ea);
+                e = y.map((v, i) => Math.abs(ev[ev.length === 1 ? 0 : i]));
+            } else {
+                if (!ctx.unc || !ya.sym) throw new Error("errorbar(): without the errors as a third argument, tick Uncertainty in the Variables pane and give y as the name of a variable (or array) that carries an uncertainty");
+                e = y.map((v, i) => ctx.unc.get(Array.isArray(ya.v) ? `${ya.name}[${i + 1}]` : ya.name) || 0);
+                if (!e.some(v => v > 0)) throw new Error(`errorbar(): '${ya.name}' has no uncertainty in the last results; give the errors as a third argument`);
+            }
+            const ed = e.map((v, i) => Math.abs(PlotLines.fromSI(y[i] + v, ya.unit) - PlotLines.fromSI(y[i], ya.unit)));   // a difference, in the display unit
+            const st = style(); st.marker = st.marker || 'o';
+            const tr = PlotLines.trace(PlotLines.disp(x, xa.unit), PlotLines.disp(y, ya.unit), ya.name, st);
+            tr.error_y = { type: 'data', array: ed, visible: true, thickness: 1.2, width: 4 };
+            data = [tr]; layout = { xaxis: { title: lab(nameOf(xa), xa.unit) }, yaxis: { title: lab(nameOf(ya), ya.unit) }, showlegend: false };
+        } else if (fn === 'polarplot') {
+            need(nums.length === 2 && texts.length <= 1, "polarplot(theta, r), theta in radians, optionally with a style such as 'r--'");
+            const [ta, ra] = nums, th = vec(ta, 'theta'), r = vec(ra, 'r');
+            same(th, r, ta, ra);
+            const tr = PlotLines.trace(null, null, ra.name, style());
+            delete tr.x; delete tr.y; tr.type = 'scatterpolar'; tr.r = PlotLines.disp(r, ra.unit); tr.theta = th.map(v => Number.isFinite(v) ? v * 180 / Math.PI : null);
+            data = [tr]; layout = { polar: { radialaxis: { title: { text: lab(nameOf(ra), ra.unit) } } }, showlegend: false }; extra = { polar: true };
+        } else {   // plot3
+            need(nums.length === 3 && texts.length <= 1, "plot3(x, y, z), optionally with a style such as 'r--' or 'o'");
+            const [xa, ya, za] = nums, x = vec(xa, 'x'), y = vec(ya, 'y'), z = vec(za, 'z');
+            same(x, y, xa, ya); same(x, z, xa, za);
+            const tr = PlotLines.trace(PlotLines.disp(x, xa.unit), PlotLines.disp(y, ya.unit), za.name, style());
+            tr.type = 'scatter3d'; tr.z = PlotLines.disp(z, za.unit);
+            const ok3 = ['circle', 'cross', 'diamond', 'square', 'x'];
+            if (tr.marker && tr.marker.symbol && !ok3.includes(tr.marker.symbol)) tr.marker.symbol = 'circle';
+            data = [tr]; layout = { scene: { xaxis: { title: lab(nameOf(xa), xa.unit) }, yaxis: { title: lab(nameOf(ya), ya.unit) }, zaxis: { title: lab(nameOf(za), za.unit) } }, showlegend: false }; extra = { three: true };
+        }
+        const pts = data.reduce((n, t) => n + ((t.x || t.r || []).length), 0);
+        return Object.assign({ data: data.map(clean), layout, logx: false, logy: false, three: false, polar: false, note: `${fn}: ${data.length} curve(s), ${pts} point(s)` }, extra);
     }
 
     // propertyplot(fluid, 'Ts'|'Ph'|'Pv'|'hs'[, y, x][, 'cycle']): the saturation dome and the states.
