@@ -37,6 +37,14 @@
 </head>
 
 <body>
+    <!-- Phones only (narrow screens, see style.css): the panes are stacked, and this bar jumps to one -->
+    <div id="pane-jump" role="navigation" aria-label="Panes">
+        <button type="button" data-pane="editor-panel" title="Go to the Equations pane">Equations</button>
+        <button type="button" data-pane="variables-panel" title="Go to the Variables pane">Variables</button>
+        <button type="button" data-pane="console-panel" title="Go to the Console">Console</button>
+        <button type="button" data-pane="parametric-panel" title="Go to the Parametric Table">Table</button>
+        <button type="button" data-pane="plot-panel" title="Go to the Plot pane">Plot</button>
+    </div>
     <div class="container">
         <!-- Panel 1: Code/Equations Editor -->
         <div class="panel" id="editor-panel">

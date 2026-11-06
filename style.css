@@ -375,6 +375,30 @@ button.teal:hover { background-color: #117a8b; }
     color: #0056b3;
 }
 
+/* Phones (narrow screens): one column. The panes are stacked in the order Equations, Variables, Console, Table, Plot (the plot comes after a table), each with a
+   height of its own, the gutters are hidden (they are for a mouse), and a bar at the top jumps to a pane. Wider screens, tablets
+   included, keep the two columns. !important beats the sizes a gutter drag left on the panes. */
+#pane-jump { display: none; }
+@media (max-width: 600px) {
+    body { height: auto; min-height: 100vh; padding: 6px; }
+    #pane-jump {
+        display: flex; gap: 4px; position: sticky; top: 0; z-index: 20; padding: 4px 0 6px; background: #f4f4f9;
+    }
+    #pane-jump button { flex: 1 1 0; padding: 6px 2px; font-size: var(--fs-small); min-width: 0; }
+    .container { display: flex; flex-direction: column; height: auto; gap: 8px; }
+    .col { display: contents; }
+    .gutter { display: none !important; }
+    .panel { flex: none !important; scroll-margin-top: 44px; min-height: 0; }
+    #editor-panel { order: 1; height: 60vh; min-height: 300px; }
+    #variables-panel { order: 2; height: 50vh; min-height: 260px; }
+    #console-panel { order: 3; height: 50vh; min-height: 260px; }
+    #parametric-panel { order: 4; height: 55vh; min-height: 280px; }
+    #plot-panel { order: 5; height: 75vh; min-height: 380px; }
+    input, select, textarea { font-size: 16px !important; }   /* iOS zooms into smaller text boxes */
+    .panel-header { flex-wrap: wrap; gap: 4px; }   /* the Plot buttons wrap under the title instead of over it */
+    .modal-overlay .modal-content { width: 96%; max-height: 92%; padding: 12px; }
+}
+
 /* Modal Inspector Styles for inspecting Matrices and Vectors */
 .modal-overlay {
     display: none;

@@ -68,6 +68,7 @@ h = Nu*k/D                      // 96.66 W/(m^2 K)
 - **Design to a spec with a probability:** `W = atleast(W_spec, 0.95)` (or `atmost`) makes the W used in the equations W_spec plus the margin that meets the spec with that probability (here 1.645 u_W, from the propagated uncertainties of the built design).
 - **Tabulated data:** `interpolate()` in 1-D and 2-D, linear, cubic spline or monotone (pchip), forward or backward, with optional extrapolation and a warning.
 - A console command line for quick calculations, including symbolic `derivative()` and `simplify()`.
+- **Phones:** on a narrow screen the panes stack in one column, with a bar at the top that jumps to each one; wider screens keep two columns.
 - **Keyboard shortcuts** for the main commands, with the function keys of EES (F2 Solve, F3 table, F4 Min/Max, F8 Check, F10 Formatted, ...) and Ctrl+Enter, Ctrl+S, Ctrl+O, Ctrl+/ and others; `?` on the command line lists them.
 - **AI assistant:** `AI: question` on the command line asks a model of your choice (Anthropic, OpenAI, Gemini, OpenRouter, or one running on your computer, such as Ollama) with your key, which stays in the browser. It sees the equations, the last results and the latest messages (`AI: show` prints exactly what is sent). Equations it proposes are checked on a copy, corrected in a few rounds, and inserted only when you click.
 - **Save** and **Open** sessions as plain-text `.ses` files (equations plus variable settings), and export results and tables as tab-separated text that opens in Excel.
