@@ -18,19 +18,19 @@ const CPmod = (await import(pathToFileURL(path.join(TESTS, 'node_modules/coolpro
 globalThis.window = { CoolProp: await CPmod(), CoolPropReady: true };
 export const CP = globalThis.window.CoolProp;
 
-const files = ['thermo.js', 'solids.js', 'correlations.js', 'units.js', 'userfunctions.js', 'ode.js', 'parser.js', 'solver.js', 'eqformat.js', 'plots.js', 'convert.js'];
+const files = ['thermo.js', 'solids.js', 'correlations.js', 'units.js', 'userfunctions.js', 'ode.js', 'parser.js', 'solver.js', 'eqformat.js', 'plots.js', 'convert.js', 'ai.js'];
 const code = files.map(f => fs.readFileSync(path.join(APP, f), 'utf8')).join('\n');
 export const logs = [];
 const con = { log: (...x) => logs.push(x.join(' ')), error: (...x) => logs.push('ERROR: ' + x.join(' ')), warn: (...x) => logs.push('WARN: ' + x.join(' ')) };
 export const E = new Function('console', code +
-  '\nreturn { EESParser, BoundedSolver, UnitConsistencyChecker, UserFunctions, UnitConv, OdeBlocks, OdeIntegrator, OptimizerND, Optimizer1D, Solids, SOLIDS_DB, Corr, CORRELATIONS, Interp: typeof Interp !== "undefined" ? Interp : null, Quadrature: typeof Quadrature !== "undefined" ? Quadrature : null, EqFormat: typeof EqFormat !== "undefined" ? EqFormat : null, NH3H2O: typeof NH3H2O !== "undefined" ? NH3H2O : null, Uncertainty, PlotLines: typeof PlotLines !== "undefined" ? PlotLines : null, ThermoEngine, Seawater, EESConvert };')(con);
+  '\nreturn { EESParser, BoundedSolver, UnitConsistencyChecker, UserFunctions, UnitConv, OdeBlocks, OdeIntegrator, OptimizerND, Optimizer1D, Solids, SOLIDS_DB, Corr, CORRELATIONS, Interp: typeof Interp !== "undefined" ? Interp : null, Quadrature: typeof Quadrature !== "undefined" ? Quadrature : null, EqFormat: typeof EqFormat !== "undefined" ? EqFormat : null, NH3H2O: typeof NH3H2O !== "undefined" ? NH3H2O : null, Uncertainty, PlotLines: typeof PlotLines !== "undefined" ? PlotLines : null, ThermoEngine, Seawater, EESConvert, DesignSpec, SESAI };')(con);
 
 // Parse and solve; guesses = { name: value } set before solving.
 export function run(text, guesses = {}) {
   const p = new E.EESParser(); p.parse(text);
   for (const [k, v] of Object.entries(guesses)) p.variables.get(k).guess = v;
   const t0 = Date.now();
-  const st = new E.BoundedSolver(p.parsedASTs, p.variables, p.odeCalls).solve();
+  const st = p.specs && p.specs.length ? E.DesignSpec.solve(p).solution : new E.BoundedSolver(p.parsedASTs, p.variables, p.odeCalls).solve();   // spec lines: as Solve does
   return { st, p, ms: Date.now() - t0, tb: E.OdeBlocks.tables };
 }
 // Error message of a run, or null if it succeeded.

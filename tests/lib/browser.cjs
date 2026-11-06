@@ -32,14 +32,22 @@ async function open() {
   const startup = await pg.$eval('#console-output', e => e.textContent);
   await pg.evaluate(() => { delete window.showSaveFilePicker; window.prompt = (msg, suggested) => suggested; });   // save by download, accepting the suggested name
   const con = () => pg.$eval('#console-output', e => e.textContent);
+  // The solved values as the Variables pane shows them, one per line: "  name = value [unit]". Solve no longer lists them in the
+  // Console, so tests that look for a value read it here (the pane and the old listing format numbers alike).
+  const listing = async () => (await pg.$$eval('#variables-container tbody tr', trs => trs.map(t => {
+    const name = t.children[0].textContent.trim(), val = (t.querySelector('.val') || {}).textContent, u = t.querySelector('input[data-field="unit"]');
+    return val && val.trim() ? `  ${name} = ${val.trim()}${u && u.value ? ' [' + u.value + ']' : ''}\n` : '';
+  }))).join('');
+  // the Console and the listing of the values, in the form the Console showed them before
+  const sol = async () => (await con()) + (await listing());
   const clear = () => pg.$eval('#console-output', e => { e.textContent = ''; });
   // Put text in the editor, press Solve and return the console text.
   async function solve(text) {
     await pg.fill('#editor', text); await clear(); await pg.click('#btn-solve');
     await pg.waitForFunction(() => /Solution Converged|ERROR|Error/.test(document.querySelector('#console-output').textContent), null, { timeout: 60000 }).catch(() => {});
     await pg.waitForTimeout(50);
-    return con();
+    return sol();
   }
-  return { b, ctx, pg, con, clear, solve, missing, pageErrors, APP, startup };
+  return { b, ctx, pg, con, listing, sol, clear, solve, missing, pageErrors, APP, startup };
 }
 module.exports = { open, APP };
