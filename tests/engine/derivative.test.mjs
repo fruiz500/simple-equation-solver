@@ -8,6 +8,10 @@ ok('polynomial cp', Math.abs(s.cp - (-0.0016 + 2 * 8e-6 * 400)) < 1e-15, s.cp);
 s = run(`derivative(z^3 - 12*z + 12, z) = 0`, { z: 3 }).st; ok('optimum from derivative = 0', Math.abs(s.z - 2) < 1e-9, s.z);
 // optimum intercooler pressure for two-stage compression: Px = sqrt(P1*P2)
 s = run(`P1 = 100\nP2 = 900\nk = 0.4/1.4\nderivative((Px/P1)^k + (P2/Px)^k, Px) = 0`, { Px: 200 }).st; ok('two-stage optimum', Math.abs(s.Px - 300) < 1e-6, s.Px);
+s = run(`x_1 = 1\nd_1 = derivative(x_1^2*sin(x_1), x_1)\nq = derivative('x_1^3', 'x_1')`).st;
+ok('subscripted names can be differentiated (x_1 was refused with a misleading message)', Math.abs(s.d_1 - (Math.cos(1) + 2 * Math.sin(1))) < 1e-12 && Math.abs(s.q - 3) < 1e-12, JSON.stringify(s));
+s = run(`x = 1\nr = derivative(x^2*sin(x), x) - (x^2*cos(x) + 2*x*sin(x))`).st;
+ok('the check an assistant is told to write: derivative(f, x) minus its formula is zero', Math.abs(s.r) < 1e-14, s.r);
 s = run(`x = 2\ny = derivative(ln(x)*x, x)\nz = derivative('sin(x)', 'x')`).st;
 ok('ln and quoted forms', Math.abs(s.y - (Math.log(2) + 1)) < 1e-12 && Math.abs(s.z - Math.cos(2)) < 1e-12, JSON.stringify(s));
 s = run(`function g = slope(x)\n  g = derivative(x^4, x)\nend\nq = slope(2)`).st; ok('in a function', s.q === 32, s.q);

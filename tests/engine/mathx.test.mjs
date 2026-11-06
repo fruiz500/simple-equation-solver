@@ -119,4 +119,13 @@ ok('factorialln(n) = ln(n!) for n = 0, 5, 20', near(v('factorialln(0)'), 0, 1e-1
   ok('messages: rows of X, the level, the last argument', /X has 2 rows/.test(err('x_ = regress([1, 2, 3], [1, 0; 1, 1])') || '') && /between 0 and 1/.test(err("x_ = regress([1, 2, 3.5], [1; 2; 3], 'ci', 95)") || '') && /'summary'/.test(err("x_ = regress([1, 2, 3.5], [1; 2; 3], 'p-value')") || ''));
   ok('statistics need more points than parameters', /need more points than parameters/.test(err("x_ = regress([1, 2], [1, 0; 1, 1], 'pvalue')") || ''));
 }
+// ---- find, any, all, eye, numel, length, flip, cumprod, normpdf
+ok('find: 1-based places of the nonzero entries', close(arr('find([3, 0, 5, 0, 1])'), [1, 3, 5], 1e-12) && close(arr('find([1, 5, 2, 7] > 3)'), [2, 4], 1e-12));
+ok('any and all', v('any([1, 5, 2] > 4)') === true && v('any([1, 5, 2] > 9)') === false && v('all([1, 5, 2] > 0)') === true && v('all([1, 5, 2] > 1)') === false);
+ok('eye(2) is the identity; eye(0) is refused', JSON.stringify(arr('eye(2)')) === '[[1,0],[0,1]]' && /whole number/.test(err('x_ = eye(0)') || ''));
+ok('numel counts all the entries, length the longest side', v('numel([1, 2, 3; 4, 5, 6])') === 6 && v('length([1, 2, 3; 4, 5, 6])') === 3 && v('length([4, 5])') === 2 && v('length(7)') === 1);
+ok('flip reverses a vector, a matrix top to bottom', close(arr('flip([1, 2, 3])'), [3, 2, 1], 1e-12) && JSON.stringify(arr('flip([1, 2; 3, 4])')) === '[[3,4],[1,2]]');
+ok('cumprod', close(arr('cumprod([1, 2, 3, 4])'), [1, 2, 6, 24], 1e-12));
+ok('normpdf: 1/sqrt(2 pi) at 0, and with mu and sigma', near(v('normpdf(0)'), 0.3989422804014327, 1e-14) && near(v('normpdf(3, 3, 2)'), 0.3989422804014327 / 2, 1e-14) && /sigma must be positive/.test(err('x_ = normpdf(0, 0, -1)') || ''));
+ok('the names stay free as variables', run('find = 3\nany = 2\nlength = 4 [m]\ny = find*any*length').st.y === 24);
 done();

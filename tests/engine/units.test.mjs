@@ -42,4 +42,6 @@ ok('an offset temperature inside an equation is refused, with the way out', /'10
 ok('an unknown unit inside an equation is an error', /unit 'foo' in '3 \[foo\]' is not recognized/.test(err('a = 3 [foo] + 1') || ''));
 ok('array elements and property calls are not mistaken for units', run(`T[1] = 5\nx = T[1] + 1`).st.x === 6);
 ok('an offset temperature as a whole function argument is a temperature: enthalpy(water, 25 [degC], 1 [atm])', Math.abs(run(`h = enthalpy('water', 25 [degC], 1 [atm])`).st.h - run(`h = enthalpy('water', 298.15, 101325)`).st.h) < 1e-9);
+ok('Check Units knows the unit of a number inside an equation: 100 [kPa] added to an enthalpy is flagged', units(`h_1 = 2.5e6 [J/kg]\nh_2 = h_1 + 100 [kPa] + 0`).issues.length === 1 && units(`h_1 = 2.5e6 [J/kg]\nh_2 = h_1 + 100 [kJ/kg] + 0`).issues.length === 0);
+ok('... and infers from it: m = 1000 [kW]/dh gives kg/s', (() => { const u = units(`dh = 2e5 [J/kg]\nm = 1000 [kW]/dh`); return u.p.variables.get('m').inferredUnit === 'kg/s'; })());
 done();
