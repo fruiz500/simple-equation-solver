@@ -37,7 +37,10 @@ document.addEventListener('DOMContentLoaded', () => {
         editor.scrollTop = Math.max(0, (n - 1) * lh - editor.clientHeight / 3);
         showCursor();
     }
-    consoleOutput.addEventListener('click', (e) => { const n = e.target.dataset && e.target.dataset.line; if (n) selectLine(Number(n)); });
+    consoleOutput.addEventListener('click', (e) => {
+        const n = e.target.dataset && e.target.dataset.line; if (n) selectLine(Number(n));
+        const a = e.target.dataset && e.target.dataset.ai; if (a !== undefined && a !== '' && typeof ai !== 'undefined') ai.insert(a);
+    });
 
     // ---- Tab and Shift+Tab indent and unindent (the selected lines, or at the cursor), by two spaces, undoably.
     // Esc and then Tab leaves the editor, as the Tab key does elsewhere.
@@ -94,7 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById(id).addEventListener('click', () => { flagged.clear(); drawGutter(); }));
     drawGutter();
 
-    // ---- Find and Replace in the Equations pane: Ctrl+F (Cmd+F) or Ctrl+H, or the Find... button ----
+    // ---- Find and Replace in the Equations pane: Ctrl+F, Ctrl+R or Ctrl+H (see the keyboard shortcuts), or the Find... button ----
     // A textarea hides its selection while the focus is in the bar, so the matches are drawn in a layer behind it.
     // Replacements go through the browser's own editing, so Ctrl+Z undoes them.
     const fb = {};
@@ -201,17 +204,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter') { e.preventDefault(); replaceOne(); }
         else if (e.key === 'Escape') closeFind();
     });
-    document.addEventListener('keydown', (e) => {
-        const inEditor = document.activeElement === editor || fb.bar.contains(document.activeElement);
-        const k = e.key.toLowerCase();
-        if (inEditor && (e.ctrlKey || e.metaKey) && !e.altKey && k === 'f') { e.preventDefault(); openFind(false); }
-        else if (inEditor && e.ctrlKey && !e.metaKey && !e.altKey && k === 'h') { e.preventDefault(); openFind(true); }
-        else if (e.key === 'F3' && !fb.bar.hidden) { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
-    });
 
+    // The latest warnings and errors since the last Solve or Check, for the AI assistant (ai.js); its own messages are left out
+    const aiMsgs = []; let inAI = false;
     const originalLog = console.log;
     console.log = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+        if (/^\s*--- /.test(message)) aiMsgs.length = 0;
         appendConsole(message + '\n');
         originalLog.apply(console, args);
     };
@@ -220,6 +219,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.error = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
         appendConsole('ERROR: ' + message + '\n', 'con-error');
+        if (!inAI) { aiMsgs.push('ERROR: ' + message); if (aiMsgs.length > 20) aiMsgs.shift(); }
         flagLines(message, 'err');
         originalError.apply(console, args);
     };
@@ -227,6 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.warn = function (...args) {
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
         appendConsole('WARNING: ' + message + '\n', 'con-warn');
+        if (!inAI) { aiMsgs.push('WARNING: ' + message); if (aiMsgs.length > 20) aiMsgs.shift(); }
         flagLines(message, 'warn');
         originalWarn.apply(console, args);
     };
@@ -239,6 +240,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // equations and clear the values stored in the parser, so Export, Save and the Variables pane read this snapshot,
     // and only while the equation text is still the one that produced it.
     let lastResults = null;
+    let savedText = '';   // the equations as last opened or saved: leaving the page with other text asks first
     const sameText = (a, b) => { const n = (t) => String(t).replace(/\r\n?/g, '\n').replace(/\s+$/, ''); return n(a) === n(b); };
     function snapshotResults() {
         const values = new Map();
@@ -349,6 +351,11 @@ document.addEventListener('DOMContentLoaded', () => {
         lastUnc = null;
         try {
             lastUnc = { text: editor.value, ...Uncertainty.run(parser, base) };
+            showUncertainty(base);
+        } catch (e) { lastUnc = null; console.error(e.message); }
+    }
+    function showUncertainty(base) {
+        try {
             console.log('Uncertainties (first order, independent inputs):');
             displayOrder([...lastUnc.u.keys()]).forEach(n => {
                 const u = lastUnc.u.get(n);
@@ -362,6 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const cur = currentResults();
         if (uncBox.checked && cur) {   // ticked after a solve: propagate now
             try { parser.parse(editor.value); } catch (e) { console.error(e.message); return; }
+            if (parser.specs.length) { console.log('With spec lines, the uncertainties are propagated at every Solve, ticked or not.'); updateVariablesUI(parser.variables); return; }
             if (parser.uncertain.size) runUncertainty(Object.fromEntries(cur));
         }
         updateVariablesUI(parser.variables);
@@ -420,7 +428,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.guess))}" data-var="${name}" data-field="guess" title="Starting value of ${name} for the solver" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.lower))}" placeholder="-inf" data-var="${name}" data-field="lower" title="Lower bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" title="Upper bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
-                <td style="padding:2px;"><input type="text" value="${meta.unit || ''}" placeholder="${inferredOf(name, meta) || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input. Ctrl+D copies it to the next row; Ctrl+Shift+D to every row below with the same dimensions" style="width:100px; text-align:center;"></td>
+                <td style="padding:2px; white-space:nowrap;"><input type="text" value="${meta.unit || ''}" placeholder="${inferredOf(name, meta) || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input. Ctrl+D (or the arrow beside it) copies it to the next row; Ctrl+Shift+D (or Shift+click on the arrow) to every row below with the same dimensions" style="width:100px; text-align:center;"><button type="button" class="fill-down" tabindex="-1" title="Copy this unit to the next row (Ctrl+D); Shift+click: to every row below with the same dimensions (Ctrl+Shift+D)">&darr;</button></td>
                 <td class="val" style="padding:2px 4px;">${solvedDisplay}</td>`;
             if (showUnc) {
                 const g = parser.uncertain.get(name), u = uc && uc.u.get(name), td = document.createElement('td');
@@ -438,21 +446,38 @@ document.addEventListener('DOMContentLoaded', () => {
         // Fill down in the Unit column: Ctrl+D copies the unit to the next row; Ctrl+Shift+D to every row below whose variable
         // has the same dimensions (as Check Units found them). Rows whose dimensions differ are skipped.
         const unitInputs = [...table.querySelectorAll('input[data-field="unit"]')];
-        unitInputs.forEach((input, idx) => input.addEventListener('keydown', (e) => {
-            if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'd') return;
-            e.preventDefault();
-            // dimensions from the SI unit shown as each row's placeholder (what Check Units found at the last Solve or Check)
-            const siOf = (name) => { const el = unitInputs.find(t => t.dataset.var === name); return el && el.placeholder && el.placeholder !== '[-]' ? el.placeholder : ''; };
-            const u = input.value.trim(), dims = (name) => { const si = siOf(name); try { return si ? UnitConsistencyChecker.dimsOfUnit(si === '-' ? '' : si).join() : null; } catch (er) { return null; } };
+        unitInputs.forEach((input, idx) => {
+            input.addEventListener('keydown', (e) => {
+                if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'd') return;
+                e.preventDefault();
+                fillDown(input, idx, e.shiftKey);
+            });
+            const btn = input.nextElementSibling;   // the arrow: the same, by mouse (it keeps the focus in the cell)
+            if (btn) { btn.addEventListener('mousedown', (e) => e.preventDefault()); btn.addEventListener('click', (e) => fillDown(input, idx, e.shiftKey)); }
+        });
+        function fillDown(input, idx, all) {
+            const e = { shiftKey: all };
+            // dimensions of a row: from the SI unit shown as its placeholder (what Check Units found at the last Solve or Check),
+            // or else from the unit already in the row (a unit tag in the equations leaves no placeholder)
+            const dimsOf = (unit) => { try { return UnitConsistencyChecker.dimsOfUnit(unit === '-' ? '' : unit).join(); } catch (er) { return null; } };
+            const dims = (name) => {
+                const el = unitInputs.find(t => t.dataset.var === name);
+                if (!el) return null;
+                if (el.placeholder && el.placeholder !== '[-]') return dimsOf(el.placeholder);
+                const own = ((parser.variables.get(name) || {}).unit || '').trim();
+                return own && UnitConv.isValid(own) ? dimsOf(own) : null;
+            };
+            const u = input.value.trim();
             if (u !== ((parser.variables.get(input.dataset.var) || {}).unit || '')) input.dispatchEvent(new Event('change'));   // this row first
             if (u !== ((parser.variables.get(input.dataset.var) || {}).unit || '')) return;   // refused (unknown unit or wrong dimensions)
-            const d0 = dims(input.dataset.var), targets = e.shiftKey ? unitInputs.slice(idx + 1).filter(t => d0 && dims(t.dataset.var) === d0) : unitInputs.slice(idx + 1, idx + 2);
+            const d0 = u ? dimsOf(u) : dims(input.dataset.var), targets = e.shiftKey ? unitInputs.slice(idx + 1).filter(t => d0 && dims(t.dataset.var) === d0) : unitInputs.slice(idx + 1, idx + 2);
             let n = 0;
             targets.forEach(t => { const m = parser.variables.get(t.dataset.var); if (!m || !UnitConv.isValid(u)) return; if (u && d0 && dims(t.dataset.var) && dims(t.dataset.var) !== d0) return; m.unit = u; n++; });
             if (n) { updateVariablesUI(parser.variables); console.log(`Unit ${u || '(none)'} copied to ${n} variable(s) below.`); }
+            else if (e.shiftKey) console.log(`No row below ${input.dataset.var} has the dimensions of ${u || 'its unit'} (as found by Check).`);
             const again = [...variablesContainer.querySelectorAll('input[data-field="unit"]')][e.shiftKey ? idx : idx + 1];
             if (again) again.focus();
-        }));
+        }
         // Edits are entered in the variable's display unit and stored in SI
         table.querySelectorAll('input[data-var]').forEach(input => {
             input.addEventListener('change', (e) => {
@@ -585,7 +610,7 @@ document.addEventListener('DOMContentLoaded', () => {
             displayModeBar: true,
             responsive: true,
             modeBarButtonsToRemove: ['toImage'],
-            edits: { legendPosition: true, legendText: true }
+            edits: PLOT_EDITS   // click an axis title or a note to retype it; drag a note, or the head or tail of its arrow
         };
 
         // Handle plot overlay vs fresh plot redraw
@@ -610,8 +635,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // A plot line (propertyplot, contourplot, heatmapplot, surfaceplot; plots.js), drawn from a set of results in SI.
     // It replaces the plot shown; log x and log y follow the diagram (log P on P-h, for example).
-    function drawPlotLine(src, values) {
-        const { sc, units } = PlotLines.scope(values, unitOf);
+    const PLOT_EDITS = { legendPosition: true, legendText: true, axisTitleText: true, annotationText: true, annotationPosition: true, annotationTail: true };
+    // Notes: why the plot shown cannot take one (null if it can)
+    function noNotes(pc) {
+        if (!pc.data || !pc.data.length) return 'there is no plot to put a note on: draw one first';
+        if (pc.data.some(t => /3d|surface|pie|polar|mesh/.test(t.type || '') || t.type === 'sankey')) return 'notes go on the flat (x, y) plots, not on 3-D, polar or pie plots';
+        return null;
+    }
+    function noteStyle(pc) { const c = (pc._fullLayout && pc._fullLayout.font && pc._fullLayout.font.color) || '#222'; return { font: { color: c }, arrowcolor: c }; }
+    // text(...) and arrow(...) lines: put on the plot shown (positions on a log axis are given to Plotly as logarithms)
+    function addNotes(src, values, noUnit) {
+        const { sc, units } = PlotLines.scope(values, (k) => (noUnit && noUnit.has(k)) ? '' : unitOf(k));
+        const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units });
+        const pc = document.getElementById('plot-container'), why = noNotes(pc);
+        if (why) throw new Error(why);
+        const lx = pc._fullLayout.xaxis.type === 'log', ly = pc._fullLayout.yaxis.type === 'log';
+        const fix = (v, log) => { if (!log) return v; if (!(v > 0)) throw new Error(`a note on a log axis needs a positive position, not ${v}`); return Math.log10(v); };
+        const list = out.notes.map((a) => {
+            const b = Object.assign({}, a, noteStyle(pc)); b.x = fix(a.x, lx); b.y = fix(a.y, ly);
+            if (a.ax !== undefined) { b.ax = fix(a.ax, lx); b.ay = fix(a.ay, ly); }
+            return b;
+        });
+        Plotly.relayout(pc, { annotations: (pc.layout.annotations || []).concat(list) });
+        return out.note;
+    }
+    function drawPlotLine(src, values, noUnit) {
+        if (PlotLines.NOTE.includes(PlotLines.isCall(src))) return addNotes(src, values, noUnit);   // noUnit: names (kept on the command line) whose values are plain, in SI
+        const { sc, units } = PlotLines.scope(values, (k) => (noUnit && noUnit.has(k)) ? '' : unitOf(k));
         const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units, unc: (curUnc() || {}).u });
         if (!plotStyle.saved) plotStyle.saved = { logX: plotStyle.logX, logY: plotStyle.logY };   // put back for the next table plot
         plotStyle.logX = out.logx; plotStyle.logY = out.logy;
@@ -619,18 +669,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const pc = document.getElementById('plot-container');
         Plotly.purge(pc);
         Plotly.newPlot(pc, out.data, Object.assign({ margin: { t: out.layout.title ? 35 : 25, r: 25, l: 55, b: 45 } }, out.layout),
-            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'] });
+            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'], edits: PLOT_EDITS });
         const st = plotStyleUpdate();
-        if (out.three) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
+        if (out.three || out.polar) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
         Plotly.relayout(pc, st);
         return out.note;
     }
     function drawPlotLines(list, values) {
-        list.forEach(pl => {
+        const isNote = (pl) => PlotLines.NOTE.includes(PlotLines.isCall(pl.src));
+        [...list.filter(pl => !isNote(pl)), ...list.filter(isNote)].forEach(pl => {   // the notes go on the plot after it is drawn
             try { console.log(`Plot, line ${pl.lineNo}: ${drawPlotLine(pl.src, values)}.`); }
             catch (err) { console.error(`Plot, line ${pl.lineNo}: ${err.message}`); }
         });
-        if (list.length > 1) console.log(`${list.length} plot lines: the Plot pane shows the last. Type another one on the command line to show it.`);
+        const nplots = list.filter(pl => !isNote(pl)).length;
+        if (nplots > 1) console.log(`${nplots} plot lines: the Plot pane shows the last. Type another one on the command line to show it.`);
     }
 
     // ==========================================
@@ -668,23 +720,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
             UnitConsistencyChecker.run(parser.parsedASTs, parser.variables); keepInferred();
             const solver = new BoundedSolver(parser.parsedASTs, parser.variables, parser.odeCalls);
-            const solution = solver.solve();
+            // spec lines: the design value is found by solving again with the propagated uncertainty (DesignSpec, solver.js)
+            const ds = parser.specs.length ? DesignSpec.solve(parser, BoundedSolver) : null;
+            const solution = ds ? ds.solution : solver.solve();
 
-            console.log("Solution Converged:");
-            displayOrder(Object.keys(solution)).forEach((varName) => {
-                const val = solution[varName];
-                if (typeof val === 'number') {
-                    const u = unitOf(varName);
-                    console.log(`  ${varName} = ${fmtNum(toDisp(varName, val))}${u ? ' [' + u + ']' : ''}`);
-                }
-                else console.log(`  ${varName} = [Data Structure]`);
-            });
+            // The values are in the Variables pane (as after Min/Max); the Console only confirms, to stay uncluttered
+            console.log(`Solution Converged: ${Object.keys(solution).length} variable(s), in the Variables pane.`);
 
             snapshotResults();
             warnOutOfBounds();
             adopt();
             lastUnc = null;
-            if (parser.uncertain.size) {
+            if (ds) {
+                lastUnc = { text: editor.value, ...ds.unc };
+                showUncertainty(solution);
+                ds.specs.forEach(sp => {
+                    const d = (n, v) => fmtNum(toDisp(n, v)) + unitTag(n), du = fmtUnc(dispDelta(unitOf(sp.name), sp.u)) + unitTag(sp.name);
+                    console.log(`Spec, line ${sp.lineNo}: ${sp.name} ${sp.op} ${d(sp.name, sp.value)} with probability ${sp.p}: the equations use ${sp.name} = ${d(sp.name, sp.design)}, a margin of ${sp.z.toFixed(3)} × ${du} (the uncertainty of ${sp.name} with ${sp.by} = ${d(sp.by, solution[sp.by])} held fixed, as in the built design; first order, normal; ${ds.passes} passes).`);
+                });
+            } else if (parser.uncertain.size) {
                 if (uncBox.checked) runUncertainty(solution);
                 else console.log(`${parser.uncertain.size} given value(s) carry an uncertainty (±); tick Uncertainty in the Variables pane to propagate them.`);
             }
@@ -743,6 +797,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             // --- REVISED: AST-Level Degree of Freedom & Variable Sweep Lock Check ---
             parser.parse(editor.value);
+            if (parser.specs.length) throw new Error(`Line ${parser.specs[0].lineNo}: spec lines (atleast, atmost) work with Solve only; for a parametric table, write ${parser.specs[0].name} as an ordinary equation.`);
 
             // Collect all variables referenced across parsed AST equations
             const activeVars = new Set();
@@ -828,6 +883,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-optimize').addEventListener('click', () => {
         try {
             parser.parse(editor.value);
+            if (parser.specs.length) { console.error(`Line ${parser.specs[0].lineNo}: spec lines (atleast, atmost) work with Solve only; for Min/Max, write ${parser.specs[0].name} as an ordinary equation.`); return; }
             const vars = displayOrder(Array.from(parser.variables.keys()));
             if (vars.length === 0) { alert("No variables found. Please enter equations first."); return; }
 
@@ -980,6 +1036,19 @@ document.addEventListener('DOMContentLoaded', () => {
         parametricContainer.innerHTML = '';
         lastTable = null;
         console.log("Parametric table cleared.");
+    });
+
+    // Add Note: a text with an arrow in the middle of the plot; drag the text to move it, the arrowhead to aim it, click the text to retype it
+    document.getElementById('btn-add-note').addEventListener('click', () => {
+        const pc = document.getElementById('plot-container'), why = noNotes(pc);
+        if (why) { console.warn('Add Note: ' + why + '.'); return; }
+        const xr = pc._fullLayout.xaxis.range, yr = pc._fullLayout.yaxis.range;
+        const a = Object.assign({ x: (xr[0] + xr[1]) / 2, y: (yr[0] + yr[1]) / 2, xref: 'x', yref: 'y', text: 'note', showarrow: true, arrowhead: 2, arrowwidth: 1.5, ax: -60, ay: -50 }, noteStyle(pc));
+        Plotly.relayout(pc, { annotations: (pc.layout.annotations || []).concat([a]) });
+    });
+    document.getElementById('btn-clear-notes').addEventListener('click', () => {
+        const pc = document.getElementById('plot-container');
+        if (pc.data) Plotly.relayout(pc, { annotations: [] });
     });
 
     document.getElementById('btn-clear-plot').addEventListener('click', () => {
@@ -1229,6 +1298,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     text = text.slice(0, m.index);
                 }
                 editor.value = text.replace(/\s+$/, '') + '\n';
+                savedText = editor.value;
                 lastName = f.name;
                 const nRes = restore(session, editor.value);
                 console.log(`Opened '${f.name}' (${norm(editor.value).split('\n').length} lines)` +
@@ -1242,7 +1312,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const { text, withResults } = buildFile();
             const name = await saveTextFile(text, lastName, ['.ses', '.txt', '.eqn'], 'Session file');
             if (!name) return;
-            lastName = name;
+            lastName = name; savedText = editor.value;
             console.log(`Saved '${name}': ` + (withResults ? 'equations and results.' : 'equations only (the results are out of date, so they were not saved; Solve first to include them).'));
         });
 
@@ -1320,6 +1390,40 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Console command line: an expression for a quick answer. Everything the equations can use is available
     // (math.js, property functions, user functions) plus the results of the last Solve, in SI. 'x = ...' keeps a
     // value for later lines. derivative(), simplify() and rationalize() also take unquoted formulas.
+    // --- AI assistant (ai.js): typed on the command line as  AI: question. It is given the equations, the last results, the
+    // variable settings and the latest messages; proposed equations are checked on a copy and inserted only on request.
+    const ai = SESAI.create({
+        local: (() => { try { return localStorage; } catch (e) { return null; } })(),
+        session: (() => { try { return sessionStorage; } catch (e) { return null; } })(),
+        env: { EESParser, UnitConsistencyChecker, BoundedSolver, DesignSpec, OdeBlocks, console },
+        context() {
+            const results = [], settings = [], settingsRaw = [], res = currentResults();
+            if (res) res.forEach((v, n) => {
+                if (typeof v !== 'number' || !Number.isFinite(v)) return;
+                results.push({ name: n, value: +Number(toDisp(n, v)).toPrecision(8), unit: unitOf(n) || inferredKept.get(n) || '' });
+            });
+            parser.variables.forEach((m, n) => {
+                const s = [];
+                if (m.guess !== 1 && typeof m.guess === 'number') s.push('guess ' + +Number(toDisp(n, m.guess)).toPrecision(6));
+                if (Number.isFinite(m.lower)) s.push('min ' + +Number(toDisp(n, m.lower)).toPrecision(6));
+                if (Number.isFinite(m.upper)) s.push('max ' + +Number(toDisp(n, m.upper)).toPrecision(6));
+                if (m.unit && unitOf(n)) s.push('display unit [' + m.unit + ']');
+                if (!s.length) return;
+                settings.push(n + ': ' + s.join(', '));
+                settingsRaw.push({ name: n, guess: (typeof m.guess === 'number' && m.guess !== 1) ? m.guess : undefined, lower: Number.isFinite(m.lower) ? m.lower : undefined, upper: Number.isFinite(m.upper) ? m.upper : undefined });
+            });
+            return { equations: editor.value, results, settings, settingsRaw, messages: aiMsgs.slice() };
+        },
+        link(id) {
+            consoleOutput.insertAdjacentHTML('beforeend', `<span class="ai-insert" data-ai="${id}" role="button" title="Replace the Equations pane with these equations (Ctrl+Z there undoes it)">[Insert these equations]</span>\n`);
+            consoleOutput.scrollTop = consoleOutput.scrollHeight;
+        },
+        setEquations(t) {
+            editor.focus(); editor.setSelectionRange(0, editor.value.length);
+            if (!document.execCommand('insertText', false, t)) { editor.setRangeText(t, 0, editor.value.length, 'end'); editor.dispatchEvent(new Event('input')); }
+        },
+    });
+
     (function () {
         const input = document.getElementById('console-input');
         if (!input) return;
@@ -1339,23 +1443,60 @@ document.addEventListener('DOMContentLoaded', () => {
             if (math.isBigNumber(v)) return v.isInteger() && v.abs().lt(math.bignumber(10).pow(math.config().precision)) ? math.format(v, { notation: 'fixed' }) : v.toString();
             return math.format(v, { precision: 10 });
         };
+        // The box grows with its text, up to 8 lines (then it scrolls)
+        const fit = () => {
+            input.style.height = 'auto';
+            const cs = getComputedStyle(input), lh = parseFloat(cs.lineHeight) || 20, pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + 2;
+            input.style.height = Math.min(input.scrollHeight + 2, 8 * lh + pad) + 'px';
+        };
+        input.addEventListener('input', fit);
+        // Several lines typed or pasted: each is run in turn (a line whose ( or [ is open continues on the next, as in the
+        // equations); after AI: the whole text is the question
+        const entries = (text) => {
+            const out = []; let cur = '', depth = 0;
+            text.split('\n').forEach((l) => {
+                cur = cur ? cur + ' ' + l.trim() : l.trim();
+                for (const ch of l.replace(/'[^']*'|"[^"]*"/g, '')) { if (ch === '(' || ch === '[') depth++; else if (ch === ')' || ch === ']') depth--; }
+                if (depth <= 0 && cur) { out.push(cur); cur = ''; depth = 0; }
+            });
+            if (cur) out.push(cur);
+            return out;
+        };
         input.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                // only from the first line (up) or the last line (down), so that the arrows still move within several lines
+                const v = input.value, at = input.selectionStart;
+                if (e.key === 'ArrowUp' ? v.lastIndexOf('\n', at - 1) >= 0 : v.indexOf('\n', input.selectionEnd) >= 0) return;
                 if (!history.length) return;
                 hpos = Math.min(history.length, Math.max(0, hpos + (e.key === 'ArrowUp' ? -1 : 1)));
                 input.value = history[hpos] || '';
+                fit();
                 e.preventDefault();
                 return;
             }
-            if (e.key !== 'Enter') return;
-            const src = input.value.trim();
-            if (!src) return;
-            history.push(src); hpos = history.length; input.value = '';
+            if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+            e.preventDefault();
+            const text = input.value.replace(/\r\n?/g, '\n').trim();
+            if (!text) return;
+            const secret = /^ai\s*:\s*setup\s+key\s+\S/i.test(text);   // an API key is neither echoed nor kept in the history
+            if (!secret) history.push(text);
+            hpos = history.length; input.value = ''; fit();
+            if (/^ai\s*:/i.test(text)) {
+                console.log('> ' + (secret ? text.replace(/(key\s+)\S[\s\S]*$/i, '$1********') : text.replace(/\n/g, '\n  ')));
+                inAI = true;
+                ai.command(text.replace(/^ai\s*:/i, '')).catch((err) => console.error(err.message)).finally(() => { inAI = false; });
+                return;
+            }
+            entries(text).forEach(run);
+        });
+        function run(src) {
             console.log('> ' + src);
-            if (PlotLines.RE.test(src)) {   // a plot line: drawn from the last Solve
-                const res = currentResults();
-                try { console.log('  ' + drawPlotLine(src, res || new Map())); } catch (err) { console.error(err.message); }
-                if (!res) console.warn('  No current results (press Solve first): only what needs none is drawn.');
+            if (src === '?') { listShortcuts(); return; }
+            if (PlotLines.isCall(src)) {   // a plot line: drawn from the last Solve and from what the command line has kept (x = linspace(0, 1, 20))
+                const res = currentResults(), vals = new Map(res || []), mine = new Set();
+                Object.keys(kept).forEach((k) => { const v = kept[k]; if (typeof v !== 'function' && !(v && v.isNode)) { vals.set(k, v); mine.add(k); } });
+                try { console.log('  ' + drawPlotLine(src, vals, mine)); } catch (err) { console.error(err.message); }
+                if (!res && !mine.size) console.warn('  No current results (press Solve first): only what needs none is drawn.');
                 return;
             }
             try {
@@ -1382,8 +1523,118 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 console.error(err.message);
             }
-        });
+        }
     })();
+
+    // ==========================================
+    // Keyboard shortcuts: those of EES wherever the browser allows (F1 to F10, Ctrl+K, Ctrl+G, Ctrl+E, Ctrl+U, Ctrl+R, ...),
+    // so that its users can keep their habits, and a few of SES's own. Ctrl is Cmd on a Mac, except where a key says Ctrl
+    // only (Cmd+H hides the browser). This table is also what ? prints on the command line and what the tooltips show.
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
+    const conIn = document.getElementById('console-input');
+    const uncBoxEl = document.getElementById('uncertainty');
+    const modalOpen = () => ['inspector-modal', 'optimize-modal', 'image-modal'].some(id => { const m = document.getElementById(id); return m && getComputedStyle(m).display !== 'none'; });
+    // a click on a button, as if by mouse: a Guess, Min, Max or Unit being typed takes effect first
+    const press = (id) => {
+        const a = document.activeElement;
+        if (a && a.tagName === 'INPUT' && a.closest('#variables-container')) a.blur();
+        document.getElementById(id).click();
+    };
+    // the selected lines of the Equations pane (whole lines): [start, end]
+    const selLines = () => {
+        const v = editor.value, a = editor.selectionStart, b = editor.selectionEnd;
+        let e = (b > a && v[b - 1] === '\n') ? b - 1 : v.indexOf('\n', b);
+        return [v.lastIndexOf('\n', a - 1) + 1, e < 0 ? v.length : e];
+    };
+    function toggleLineComments() {
+        const [s, e] = selLines(), lines = editor.value.slice(s, e).split('\n');
+        if (!lines.some(l => l.trim())) return;
+        const all = lines.filter(l => l.trim()).every(l => /^\s*\/\//.test(l));
+        const out = lines.map(l => !l.trim() ? l : all ? l.replace(/^(\s*)\/\/ ?/, '$1') : l.replace(/^(\s*)/, '$1// ')).join('\n');
+        replaceText(s, e, out); editor.focus(); editor.setSelectionRange(s, s + out.length);
+    }
+    function toggleBraces() {   // EES's Shift+Ctrl+[: the selection (or the line) between { }, or out of them
+        let [s, e] = editor.selectionStart !== editor.selectionEnd ? [editor.selectionStart, editor.selectionEnd] : selLines();
+        const t = editor.value.slice(s, e);
+        if (!t.trim()) return;
+        const m = t.match(/^(\s*)\{\s?([\s\S]*?)\s?\}(\s*)$/), out = m ? m[1] + m[2] + m[3] : '{' + t + '}';
+        replaceText(s, e, out); editor.focus(); editor.setSelectionRange(s, s + out.length);
+    }
+    function updateGuessesNow() {   // EES's Ctrl+G: the last solution becomes the guesses, once
+        const cur = currentResults();
+        if (!cur) { console.warn(lastResults ? 'The equations changed after the last Solve: Solve first, then Ctrl+G.' : 'Nothing to take as guesses yet: Solve first.'); return; }
+        parser.variables.forEach((m, n) => { if (cur.has(n)) m.value = cur.get(n); });
+        BoundedSolver.adoptGuesses(parser.variables); updateVariablesUI(parser.variables);
+        console.log('The results of the last Solve are now the guesses.');
+    }
+    function focusVariables(name) {
+        const sel = name ? `input[data-var="${CSS.escape(name)}"][data-field="guess"]` : 'input[data-field="guess"]';
+        const el = variablesContainer.querySelector(sel);
+        if (!el) { console.warn(name ? `${name} has no row in the Variables pane (press Check to bring the pane up to date).` : 'The Variables pane is empty: press Check or Solve.'); return; }
+        el.scrollIntoView({ block: 'nearest' }); el.focus(); el.select();
+    }
+    function nameAtCursor() {   // the variable name around the cursor in the Equations pane, with an index (T[2]) if it has one
+        const v = editor.value, at = editor.selectionStart, s = v.lastIndexOf('\n', at - 1) + 1, line = v.slice(s, (v.indexOf('\n', at) + 1 || v.length + 1) - 1);
+        const re = /[A-Za-z_][A-Za-z0-9_]*(\[[^\]\n]*\])?/g; let m;
+        while ((m = re.exec(line))) if (s + m.index <= at && at <= s + m.index + m[0].length) return m[0].replace(/\s+/g, '');
+        return null;
+    }
+    const SHORTCUTS = [
+        { keys: ['F1'], what: 'Help', run: () => window.open('help.html', '_blank'), btn: 'btn-help' },
+        { keys: ['F2', 'Ctrl+Enter'], what: 'Solve', run: () => press('btn-solve'), btn: 'btn-solve' },
+        { keys: ['F3', 'Ctrl+Shift+Enter'], what: 'Run the parametric table', run: () => press('btn-run-table'), btn: 'btn-run-table' },
+        { keys: ['F4'], what: 'Min/Max', run: () => press('btn-optimize'), btn: 'btn-optimize' },
+        { keys: ['F5'], what: '(Min/Max Table in EES: not in SES; the page is not reloaded)', run: () => console.warn('F5: SES has no Min/Max Table (and F5 does not reload the page here). Run Min/Max (F4) for each case.') },
+        { keys: ['F6'], what: 'Tick Uncertainty and Solve', run: () => { uncBoxEl.checked = true; press('btn-solve'); } },
+        { keys: ['F7'], what: '(Uncertainty Propagation Table in EES: not in SES)', run: () => console.warn('F7: SES has no Uncertainty Propagation Table. Tick Uncertainty and Solve (F6) for each case.') },
+        { keys: ['F8', 'Ctrl+K'], what: 'Check (syntax, counts, units)', run: () => press('btn-check-units'), btn: 'btn-check-units' },
+        { keys: ['F9', 'Ctrl+U'], what: 'Go to the Variables pane', run: () => focusVariables() },
+        { keys: ['Ctrl+Shift+V'], what: 'Go to the row, in the Variables pane, of the variable at the cursor', run: () => { const n = nameAtCursor(); if (n) focusVariables(n); else console.warn('Put the cursor on a variable name in the Equations pane first.'); } },
+        { keys: ['F10'], what: 'Formatted equations, or back to the text', run: () => press('btn-format'), btn: 'btn-format' },
+        { keys: ['Ctrl+E'], what: 'Go to the Equations pane', run: () => editor.focus() },
+        { keys: ['Ctrl+I'], what: 'Ask the AI assistant (AI: in the console box)', run: () => { conIn.focus(); if (!conIn.value.trim()) conIn.value = 'AI: '; conIn.setSelectionRange(conIn.value.length, conIn.value.length); } },
+        { keys: ['Ctrl+F'], what: 'Find in the equations', run: () => openFind(false), btn: 'btn-find' },
+        { keys: ['Ctrl+R', 'Ctrl+H'], what: 'Replace in the equations', ctrlOnly: ['Ctrl+H'], run: () => openFind(true) },
+        { keys: ['Ctrl+G'], what: 'Update guesses: the last solution becomes the guesses', run: updateGuessesNow },
+        { keys: ['Ctrl+O'], what: 'Open...', run: () => press('btn-load'), btn: 'btn-load' },
+        { keys: ['Ctrl+S'], what: 'Save...', run: () => press('btn-save'), btn: 'btn-save' },
+        { keys: ['Ctrl+/'], what: 'Comment or uncomment the selected lines with //', editor: true, run: toggleLineComments },
+        { keys: ['Ctrl+Shift+['], what: 'Put the selection (or the line) between { }, or take it out', editor: true, run: toggleBraces },
+    ];
+    const keyName = (k) => isMac ? k.replace(/^Ctrl\+/, 'Cmd+') : k;
+    const shown = (s) => s.keys.map(k => (s.ctrlOnly || []).includes(k) ? k : keyName(k));
+    function matches(spec, e, ctrlOnly) {
+        const parts = spec.split('+'), key = parts.pop() || '+', want = (m) => parts.includes(m);
+        const ctrl = ctrlOnly ? (e.ctrlKey && !e.metaKey) : (e.ctrlKey || e.metaKey);
+        if (want('Ctrl') !== ctrl || want('Shift') !== e.shiftKey || e.altKey) return false;
+        if (key === '/') return e.code === 'Slash' || e.key === '/';
+        if (key === '[') return e.code === 'BracketLeft';
+        if (key === 'Enter') return e.key === 'Enter';
+        return e.key.toLowerCase() === key.toLowerCase();
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.isComposing || modalOpen()) return;
+        for (const s of SHORTCUTS) {
+            const k = s.keys.find(spec => matches(spec, e, (s.ctrlOnly || []).includes(spec)));
+            if (!k) continue;
+            if (s.editor && document.activeElement !== editor) return;
+            e.preventDefault(); e.stopPropagation();
+            s.run();
+            return;
+        }
+        if (e.key === 'Escape' && document.activeElement === conIn) editor.focus();   // from the console box back to the equations
+    }, true);
+    SHORTCUTS.forEach(s => { const b = s.btn && document.getElementById(s.btn); if (b) b.title += ` (${shown(s).join(', ')})`; });
+    function listShortcuts() {
+        console.log('Keyboard shortcuts' + (isMac ? ' (Cmd is Ctrl on Windows and Linux)' : ' (Cmd on a Mac)') + ':\n' +
+            SHORTCUTS.map(s => '  ' + shown(s).join(', ').padEnd(24) + s.what).join('\n') +
+            '\n  ' + keyName('Ctrl+D').padEnd(24) + 'In a Unit cell: copy the unit to the next row (Shift: to every row below with the same dimensions)' +
+            '\n  ' + 'Esc'.padEnd(24) + 'In the console box: back to the Equations pane');
+    }
+    window.SESShortcuts = SHORTCUTS.map(s => ({ keys: s.keys.slice(), what: s.what }));   // for the tests: every key is in the help
+    window.addEventListener('beforeunload', (e) => {
+        if (editor.value.trim() && !sameText(editor.value, savedText)) { e.preventDefault(); e.returnValue = ''; }
+    });
 
     // The EES converter (convert.html), opened from this page, sends its result back by a message (pages opened from files
     // cannot call each other directly). Only messages from the converter window opened here are taken.

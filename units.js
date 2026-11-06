@@ -445,6 +445,7 @@ class UnitConsistencyChecker {
                 if (a.length === 1) return a[0];
                 return U.isDim(a[0]) && U.isDim(a[1]) ? U.mk(a[0].d.map((v, i) => v + (a[1].d[i] || 0))) : U.UNK;
             }
+            if (name === 'unitval' && node.args[1] && node.args[1].isConstantNode) { try { return U.mk(U.dimsOfUnit(String(node.args[1].value))); } catch (e) { return U.UNK; } }   // 100 [kJ/kg] inside an equation
             if (name === 'linspace') return U.addDims(a.slice(0, 2), ctx, node);
             if (name === 'normcdf') { if (a.length > 1) U.addDims(a, ctx, node); return U.mk(U.zero()); }
             if (name === 'norminv') return a.length > 1 ? U.addDims(a.slice(1), ctx, node) : U.mk(U.zero());

@@ -15,6 +15,7 @@ class EESParser {
         this.saved = new Map();   // name -> guess, bounds and unit of the last parse that succeeded, kept through parse errors
         this.uncertain = new Map();   // name -> { u (SI), eq (index in parsedASTs), line, given (as written) }: values given with ±
         this.plots = [];   // plot lines, { src, lineNo }: drawn from the results after Solve (plots.js), not equations
+        this.specs = [];   // spec lines, { name, op, valueAST, p, by, eq (index in parsedASTs), lineNo }: see DesignSpec (solver.js)
     }
 
     parse(text) {
@@ -24,6 +25,7 @@ class EESParser {
         this.variables = new Map();
         this.uncertain = new Map();
         this.plots = [];
+        this.specs = [];
 
         // Comments are blanked but keep their line breaks, so messages can give line numbers
         let cleanText = text.replace(/\/\*[\s\S]*?\*\/|\/\/.*|\{[^}]*\}/g, (c) => c.replace(/[^\n]/g, ' '));
@@ -67,13 +69,18 @@ class EESParser {
             const multi = line.match(/^\[([^\]]+)\]\s*=\s*([A-Za-z_]\w*)\s*\((.*)\)$/);
             if (multi && UserFunctions.active.has(multi[2])) { this.addMultiCall(multi, line, lineNo); continue; }
 
-            // A plot line, such as  propertyplot('water', 'Ts'): set aside, and drawn after Solve
-            if (/^(propertyplot|contourplot|heatmapplot|surfaceplot)\s*\(/.test(line)) {
+            // A spec line:  W = atleast(W_spec, 0.95)  - the value of W used in the equations is W_spec plus a margin, so that the
+            // real W meets W_spec with probability 0.95 (atmost: stays below it). DesignSpec (solver.js) sets the margin.
+            const specLine = line.match(/^([A-Za-z_]\w*(?:\[[^\]]*\])?)\s*=\s*(atleast|atmost)\s*\((.*)\)\s*$/i);
+            if (specLine) { this.addSpec(specLine, line, lineNo); continue; }
+            // A plot line, such as  propertyplot('water', 'Ts')  or  plot(x, y): set aside, and drawn after Solve (plots.js has the names)
+            const plotName = typeof PlotLines !== 'undefined' ? /^([a-z0-9]+)\s*\(/.exec(line) : null;
+            if (plotName && PlotLines.NAMES.includes(plotName[1])) {
                 let node;
                 try { node = math.parse(line); } catch (e) { throw new Error(`Line ${lineNo}: ${e.message} in '${line}'.`); }
-                if (!node.isFunctionNode) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
-                this.plots.push({ src: line, lineNo });
-                continue;
+                if (PlotLines.isCall(line) && node.isFunctionNode) { this.plots.push({ src: line, lineNo }); continue; }
+                // the short Matlab names (plot, bar, ...) may begin an ordinary equation, such as  bar(a) = f(b); the others cannot
+                if (PlotLines.CORE.includes(plotName[1])) throw new Error(`Line ${lineNo}: a plot line is the call alone, as in  propertyplot('water', 'Ts'), not '${line}'.`);
             }
             // A given value with its uncertainty:  T_1 = 300 [K] +- 2 [K]  ->  T_1 = 300 [K], and the uncertainty is kept
             const unc = EESParser.splitUncertainty(line);
@@ -403,7 +410,36 @@ class EESParser {
         });
     }
 
-    // A number with its unit inside an equation, on either side:  h_2 = h_1 + 100 [kJ/kg]  ->  h_2 = h_1 + 100000. (A unit at
+    // W = atleast(W_spec, p[, x]) / T = atmost(T_limit, p[, x]): the equation W = W_spec + margin, the margin (0 at first)
+    // set by DesignSpec so that W_spec is met with probability p; x, the design variable held fixed in the built design, is
+    // optional when the equations leave only one candidate.
+    addSpec(m, line, lineNo) {
+        const kind = m[2].toLowerCase(), use = `${m[1]} = ${kind}(spec value, probability) or ${m[1]} = ${kind}(spec value, probability, design variable), as in  W = atleast(W_spec, 0.95)`;
+        let node;
+        try { node = math.parse(EESParser.innerUnits(`${kind}(${m[3]})`, lineNo)); } catch (e) { throw new Error(`Line ${lineNo}: ${e.message.replace(/^Line \d+: /, '')} in '${line}'. Use ${use}.`); }
+        if (!node.isFunctionNode || (node.args.length !== 2 && node.args.length !== 3)) throw new Error(`Line ${lineNo}: use ${use}.`);
+        const target = this.flatIndex(UserFunctions.lowerIf(math.parse(m[1])));
+        if (!target.isSymbolNode) throw new Error(`Line ${lineNo}: the left side of ${kind}() is one variable, as in  W = atleast(W_spec, 0.95).`);
+        const value = this.flatIndex(UserFunctions.lowerIf(node.args[0]));
+        let p;
+        try { p = node.args[1].evaluate({}); } catch (e) { throw new Error(`Line ${lineNo}: the probability of ${kind}() must be a number, as 0.95: ${e.message}`); }
+        if (!(typeof p === 'number' && p > 0.5 && p < 1)) throw new Error(`Line ${lineNo}: the probability of meeting the spec is between 0.5 and 1, as 0.95 (a failure rate of 5 %).`);
+        let by = null;
+        if (node.args.length === 3) {
+            const dv = this.flatIndex(node.args[2]);
+            if (!dv.isSymbolNode || dv.name === target.name) throw new Error(`Line ${lineNo}: the third argument of ${kind}() is the variable held fixed in the built design (a mass flow or an area, say), not ${node.args[2].toString()}.`);
+            by = dv.name; this.registerVariable(by);
+        }
+        if (this.specs.some(sp => sp.name === target.name)) throw new Error(`Line ${lineNo}: ${target.name} has two spec lines.`);
+        const vars = new Set([target.name]); this.extractVariablesFromAST(value, vars);
+        if (vars.has(target.name) && [...value.filter(n => n.isSymbolNode && n.name === target.name)].length) throw new Error(`Line ${lineNo}: the spec value of ${target.name} cannot contain ${target.name}.`);
+        vars.forEach(v => this.registerVariable(v));
+        const margin = new math.ConstantNode(0);
+        this.parsedASTs.push({ leftAST: target, rightAST: new math.OperatorNode('+', 'add', [new math.ParenthesisNode(value), margin]), vars: [...vars], lineRaw: line, lineNo, spec: true });
+        this.specs.push({ name: target.name, op: kind === 'atleast' ? '>=' : '<=', valueAST: value, p, by, eq: this.parsedASTs.length - 1, lineNo });
+    }
+    // A number with its unit inside an equation, on either side:  h_2 = h_1 + 100 [kJ/kg]  ->  h_2 = h_1 + unitval(100000, 'kJ/kg'),
+    // unitval(x, u) being x (solver.js), with its unit for Check Units. (A unit at
     // the end of the line has been taken off before.) Offset temperatures (degC, degF) are refused there: in the middle of an
     // equation it cannot be told whether 10 [degC] is a temperature (283.15 K) or a difference (10 K), except as a whole argument
     // of a function, where it is a temperature: enthalpy('water', 25 [degC], 1 [atm]).
@@ -412,11 +448,11 @@ class EESParser {
             const u = unit.trim();
             if (/'|"/.test(line.slice(0, at).replace(/'[^']*'|"[^"]*"/g, ''))) return all;   // inside a quoted text
             const before = line.slice(0, at).trimEnd().slice(-1), after = line.slice(at + all.length).trimStart()[0];
-            const wholeArg = (before === '(' || before === ',') && (after === ',' || after === ')');   // f(25 [degC], ...): a temperature
+            const wholeArg = ['(', ',', '<', '>', '='].includes(before) && (after === ',' || after === ')');   // f(25 [degC], ...), spec(T <= 600 [degC], p): a temperature
             if (!wholeArg && /^(degC|degF|C|F|celsius|fahrenheit)$/i.test(u)) throw new Error(`Line ${lineNo}: '${all}' inside an equation is ambiguous (a temperature or a difference?). Write a difference in K (${num} [K]), or give the temperature on a line of its own.`);
             if (!UnitConv.isValid(u)) throw new Error(`Line ${lineNo}: unit '${u}' in '${all}' is not recognized (use e.g. kPa, kJ/kg, W/(m^2 K)).`);
             const si = UnitConv.toSI(Number(num), u);
-            return '(' + String(+si.toPrecision(15)) + ')';
+            return `unitval(${+si.toPrecision(15)}, '${u}')`;   // the SI value; the unit is kept for Check Units and Formatted
         });
     }
     // Positions of the '=' signs that are not part of ==, <=, >=, != (text inside quotes is skipped)

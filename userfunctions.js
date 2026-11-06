@@ -266,7 +266,7 @@ class UserFunctions {
         if (!x.isSymbolNode) throw new Error('in derivative(expression, x), x must be a variable name');
         const expr = UserFunctions.lowerIf(ex).transform(c => (c.isFunctionNode && c.fn.isSymbolNode && c.fn.name === 'ln')
             ? new math.FunctionNode(new math.SymbolNode('log'), c.args) : c);      // ln is our name for log
-        try { return math.derivative(expr, x.name); }
+        try { return math.derivative(expr, x); }   // the SymbolNode itself: math.js refuses the text 'x_1' of a subscripted name
         catch (e) {
             const fn = (/function "?([A-Za-z_]\w*)/i.exec(e.message) || [])[1];
             throw new Error(`derivative(): ${fn ? `'${fn}' cannot be differentiated symbolically` : e.message}. Only written-out formulas can be ` +

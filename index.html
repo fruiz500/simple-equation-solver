@@ -22,11 +22,18 @@
             window.CoolPropReady = true;
             console.log("CoolProp WebAssembly Engine Fully Loaded!");
             const badge = document.getElementById('thermo-status');
-            if (badge) { badge.textContent = "Thermo: CoolProp loaded"; badge.style.color = "#28a745"; }
+            if (badge) { badge.textContent = "Thermo: CoolProp preparing..."; badge.style.color = "#a05a00"; }
+            // CoolProp sets itself up at its first property call (about 2 s, once for all fluids): make that call now, after
+            // the page has been drawn, instead of at the first Solve
+            setTimeout(() => {
+                try { CP.PropsSI('H', 'T', 300, 'P', 101325, 'Water'); } catch (e) { }
+                if (badge) { badge.textContent = "Thermo: CoolProp loaded"; badge.style.color = "#28a745"; }
+            }, 50);
         }).catch(err => console.error("CoolProp failed to load: " + err.message));
     </script>
 
     <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
 
 <body>
@@ -51,13 +58,13 @@
             <textarea id="editor" spellcheck="false"
                 placeholder="Equations go here, one per line, in any order; then Solve.&#10;&#10;T_1 = 300 [K]                     // a value and its unit&#10;P_1 = 101.325 [kPa]               // converted to SI&#10;h_1 = enthalpy('water', T_1, P_1) // a property&#10;a + b = 10; a - b = 2             // two on one line&#10;x^2 = a + 3                       // may need a Guess&#10;&#10;// starts a comment. Help has the rest."></textarea></div>
             <div id="formatted" hidden><div class="fe-bar"><button id="btn-copy-word" class="small" title="Copy all the equations, ready to paste into Word as equations (and as LaTeX into other editors); click one equation to copy only that one">Copy</button><span id="fe-note"></span></div><div id="formatted-body"></div></div></div>
-            <div style="display: flex; gap: 10px;">
+            <div id="editor-buttons">
                 <button id="btn-solve" title="Solve the equations and show the results in the Variables pane">Solve</button>
                 <button id="btn-optimize" class="green" title="Find the minimum or maximum of a variable by varying the free variables">Min/Max</button>
                 <button id="btn-check-units" class="gray" title="Check the syntax, count the equations and variables, and check the units">Check</button>
                 <button id="btn-load" class="secondary" title="Open equations from a text file">Open...</button>
                 <button id="btn-save" class="secondary" title="Save the equations to a text file">Save...</button>
-                <button id="btn-find" class="secondary" title="Find and replace in the equations (Ctrl+F, Ctrl+H)">Find...</button>
+                <button id="btn-find" class="secondary" title="Find and replace in the equations (Ctrl+R, Ctrl+H to replace)">Find...</button>
                 <button id="btn-ees" class="secondary" title="Convert an EES program to SES equations (opens the converter)">From EES...</button>
                 <button id="btn-format" class="secondary" title="Show the equations formatted, with subscripts, fractions and Greek letters (display only); click again to edit">Formatted</button>
                 <input type="file" id="file-load" style="display:none">
@@ -104,9 +111,9 @@
         <div class="panel" id="console-panel">
             <h2>Console</h2>
             <pre id="console-output"></pre>
-            <input id="console-input" type="text" spellcheck="false" autocomplete="off"
-                title="Calculate an expression: Enter runs it, the up and down arrows recall earlier lines"
-                placeholder="> expression, Enter (e.g. enthalpy('water', 300, 101325), derivative(x^3 - 12*x, x), 5 ft to m)">
+            <textarea id="console-input" rows="2" spellcheck="false" autocomplete="off"
+                title="Calculate an expression, or ask the AI assistant with AI: question (AI: setup to begin). Enter runs it, Shift+Enter starts a new line, the up and down arrows (on the first or last line) recall earlier entries"
+                placeholder="> expression, Enter (e.g. enthalpy('water', 300, 101325), derivative(x^3 - 12*x, x), 5 ft to m), or AI: question. Shift+Enter for a new line"></textarea>
         </div>
 
         <!-- Panel 5: Plotly Interactive Chart -->
@@ -115,6 +122,8 @@
                 <h2>Plot</h2>
                 <div style="display: flex; gap: 6px; align-items: center;">
                     <button id="btn-clear-plot" class="secondary" title="Remove all curves" style="padding:2px 8px; font-size:var(--fs-small);">Clear Plot</button>
+                    <button id="btn-add-note" class="secondary" title="Put a note with an arrow on the plot: drag it, aim the arrow, click the text to retype it" style="padding:2px 8px; font-size:var(--fs-small);">Add Note</button>
+                    <button id="btn-clear-notes" class="secondary" title="Remove all notes from the plot" style="padding:2px 8px; font-size:var(--fs-small);">Clear Notes</button>
                     <button id="btn-save-image" class="secondary" style="padding:2px 8px; font-size:var(--fs-small);"
                         title="Save the plot, without these controls, as a PNG or SVG image">Save image...</button>
                 </div>
@@ -266,6 +275,7 @@
     <script src="solver.js"></script>
     <script src="eqformat.js"></script>
     <script src="plots.js"></script>
+    <script src="ai.js"></script>
     <script src="ui.js"></script>
 </body>
 

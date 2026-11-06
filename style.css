@@ -306,6 +306,22 @@ button.teal:hover { background-color: #117a8b; }
     border-radius: 4px;
     font-family: var(--mono);
     font-size: var(--fs-text);
+    line-height: 1.4;
+    resize: none;
+    overflow-y: auto;
+    flex: 0 0 auto;
+}
+
+/* The buttons under the Equations pane: compact, so that they fit on one row on a laptop; they wrap rather than hide */
+#editor-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+#editor-buttons button {
+    padding: 6px 10px;
+    font-size: var(--fs-small);
 }
 
 #console-output {
@@ -441,3 +457,10 @@ input[type="number"] {
     appearance: textfield;
     /* Firefox */
 }
+
+#console-output .ai-insert { color: #0645ad; cursor: pointer; text-decoration: underline; }
+#console-output .ai-insert:hover { background: #dde8fa; }
+
+/* The arrow beside the Unit cell that has the focus: copies the unit down (as Ctrl+D) */
+#variables-container .fill-down { visibility: hidden; padding: 0 4px; margin-left: 2px; font-size: 12px; line-height: 18px; vertical-align: middle; }
+#variables-container td:focus-within .fill-down { visibility: visible; }
