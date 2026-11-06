@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Simple Equation Solver, without the vapor dome: the Rankine cycle on T-s axes. Dark lines, light ones when the browser is dark -->
+  <style>
+    .cycle { stroke: #14284b; }
+    @media (prefers-color-scheme: dark) { .cycle { stroke: #e8eef8; } }
+  </style>
+  <path class="cycle" d="M8 56 L8 40 L18 18 L42 18 L56 6 L56 56 Z" fill="none" stroke-width="7" stroke-linejoin="round"/>
+</svg>

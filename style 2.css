@@ -1,0 +1,443 @@
+/* Simple Equation Solver. Copyright (C) 2026 Francisco Ruiz.
+   SPDX-License-Identifier: GPL-3.0-or-later. Free software under the GNU General Public License v3 or later; no warranty. See LICENSE. */
+/* CSS Reset and CSS Grid 2x3 Layout */
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+/* Text sizes: --fs-small for controls (labels, selects, small buttons, number boxes), --fs-text for what you read
+   and type (equations, console, variables), --fs-title for pane titles and the main buttons */
+:root {
+    --fs-small: 13px;
+    --fs-text: 15px;
+    --fs-title: 14px;
+    --mono: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    font-size: var(--fs-small);
+    background-color: #f4f4f9;
+    color: #333;
+    height: 100vh;
+    padding: 10px;
+}
+
+.container {
+    display: flex;
+    height: 100%;
+}
+
+.col {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+}
+
+.panel {
+    flex: 1 1 0;
+    min-height: 90px;
+    min-width: 0;
+}
+
+#editor-panel {
+    flex: 2 1 0;
+}
+
+/* editor : console = 2 : 1, as before */
+.gutter {
+    flex: 0 0 8px;
+    background: #dcdce4;
+    border-radius: 3px;
+    touch-action: none;
+}
+
+.gutter:hover,
+.gutter:active {
+    background: #007bff;
+}
+
+.gutter-v {
+    cursor: col-resize;
+}
+
+.gutter-h {
+    cursor: row-resize;
+}
+
+.panel {
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Grid Panel Placement */
+#editor-panel {
+    grid-column: 1 / 2;
+    grid-row: 1 / 3;
+}
+
+#console-panel {
+    grid-column: 1 / 2;
+    grid-row: 3 / 4;
+}
+
+#variables-panel {
+    grid-column: 2 / 3;
+    grid-row: 1 / 2;
+}
+
+#parametric-panel {
+    grid-column: 2 / 3;
+    grid-row: 2 / 3;
+}
+
+#plot-panel {
+    grid-column: 2 / 3;
+    grid-row: 3 / 4;
+}
+
+/* Component Styling */
+select,
+input {
+    font-size: var(--fs-small);
+}
+
+h2 {
+    font-size: var(--fs-title);
+    margin-bottom: 8px;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 4px;
+}
+
+textarea {
+    flex-grow: 1;
+    resize: none;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+    line-height: 1.4;
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+}
+
+button {
+    padding: 8px 16px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: var(--fs-title);
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+
+button.small {
+    padding: 2px 8px;
+    font-size: var(--fs-small);
+}
+
+/* Find and Replace: the bar, and the highlights drawn behind the (transparent) editor */
+.find-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.find-bar[hidden] {
+    display: none;
+}
+
+.find-bar input[type="text"] {
+    width: 120px;
+    padding: 2px 6px;
+    font-family: var(--mono);
+}
+
+.find-bar label {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    cursor: pointer;
+}
+
+#find-count {
+    color: #555;
+}
+
+#find-close {
+    margin-left: auto;
+    font-size: 16px;
+}
+
+#editor-wrap {
+    flex-grow: 1;
+    display: flex;
+    min-height: 0;
+    margin-bottom: 8px;
+}
+
+#editor-box {
+    position: relative;
+    flex-grow: 1;
+    display: flex;
+    min-width: 0;
+    background: #fff;
+}
+
+#formatted {
+    flex-grow: 1;
+    min-width: 0;
+    overflow: auto;
+    background: #fff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px 12px;
+}
+#formatted[hidden], #editor-gutter[hidden], #editor-box[hidden] { display: none; }
+.fe-bar { display: flex; gap: 10px; align-items: center; font-size: 12px; color: #555; margin-bottom: 4px; }
+.fe-eq { cursor: copy; border-radius: 3px; }
+.fe-eq:hover { background: #f0f6ff; }
+.fe-eq math { font-size: 17px; margin: 6px 0; }
+.fe-in { margin-left: 2em; }
+.unc-given { color: #777; }
+.fe-text { font-family: monospace; font-size: 13px; color: #555; margin: 2px 0; white-space: pre; }
+.fe-empty { color: #888; }
+
+#editor-box textarea {
+    margin-bottom: 0;
+    background: transparent;
+    position: relative;
+    border-radius: 0 4px 4px 0;
+}
+
+/* Line numbers: the current line in bold, lines named by an error in red, by a warning in amber */
+#editor-gutter {
+    overflow: hidden;
+    flex: 0 0 auto;
+    background: #f3f3f6;
+    border: 1px solid #ccc;
+    border-right: none;
+    border-radius: 4px 0 0 4px;
+    padding: 8px 6px 8px 8px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+    line-height: 1.4;
+    color: #999;
+    text-align: right;
+    user-select: none;
+    cursor: pointer;
+}
+
+#editor-gutter div.cur {
+    color: #333;
+    font-weight: bold;
+}
+
+#editor-gutter div.warn {
+    background: #ffe2a8;
+    color: #7a4500;
+}
+
+#editor-gutter div.err {
+    background: #f8c4c4;
+    color: #a00;
+}
+
+#editor-marks {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border: 1px solid transparent;
+    padding: 8px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+    line-height: 1.4;
+    white-space: pre;
+    color: transparent;
+    pointer-events: none;
+}
+
+#editor-marks mark {
+    color: transparent;
+    background: #fff0a0;
+    border-radius: 2px;
+}
+
+#editor-marks mark.cur {
+    background: #ffb347;
+}
+
+/* Colored buttons, each with a darker shade on hover */
+button.green { background-color: #28a745; }
+button.green:hover { background-color: #1e7e34; }
+button.gray { background-color: #6c757d; }
+button.gray:hover { background-color: #545b62; }
+button.teal { background-color: #17a2b8; }
+button.teal:hover { background-color: #117a8b; }
+
+#console-output .lineref {
+    color: #0056b3;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+#console-input {
+    margin-top: 4px;
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+}
+
+#console-output {
+    flex-grow: 1;
+    background: #fafafa;
+    color: #1a1a1a;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 8px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: var(--fs-text);
+    white-space: pre-wrap;
+}
+
+#console-output .con-error { color: #c00; }
+#console-output .con-warn { color: #a05a00; }
+
+/* Variables pane */
+#variables-container table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-text);
+}
+
+#variables-container input {
+    font-size: var(--fs-small);
+}
+
+#variables-container td.val {
+    font-family: var(--mono);
+    font-weight: bold;
+    color: #0056b3;
+}
+
+#plot-container,
+#variables-container,
+#parametric-container {
+    flex-grow: 1;
+    overflow-y: auto;
+}
+
+.clickable-badge {
+    color: #007bff;
+    cursor: pointer;
+    text-decoration: underline;
+    font-weight: bold;
+}
+
+.clickable-badge:hover {
+    color: #0056b3;
+}
+
+/* Modal Inspector Styles for inspecting Matrices and Vectors */
+.modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal-content {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    width: 80%;
+    max-width: 600px;
+    max-height: 80%;
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-weight: bold;
+}
+
+.modal-close {
+    cursor: pointer;
+    color: red;
+    font-weight: bold;
+}
+
+.modal-body {
+    overflow: auto;
+    flex-grow: 1;
+    font-family: var(--mono);
+    font-size: 13px;
+}
+
+table.matrix-table {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+table.matrix-table td {
+    border: 1px solid #ccc;
+    padding: 4px;
+    text-align: center;
+}
+
+.param-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    font-size: var(--fs-small);
+    align-items: center;
+}
+
+.param-controls input {
+    width: 60px;
+    padding: 2px;
+}
+
+/* Remove up-down value buttons (spinners) from number inputs */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;
+    /* Firefox */
+    appearance: textfield;
+    /* Firefox */
+}
