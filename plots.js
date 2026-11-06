@@ -9,7 +9,8 @@ class PlotLines {
     static CORE = ['propertyplot', 'contourplot', 'heatmapplot', 'surfaceplot'];   // these names cannot begin an ordinary equation; the Matlab names can
     static ALIAS = { surf: 'surfaceplot', mesh: 'surfaceplot', contour: 'contourplot', pcolor: 'heatmapplot' };   // Matlab names for the plots of a two-dimensional array
     static FUN = ['fplot', 'fplot3', 'fsurf', 'fcontour', 'fimplicit', 'fquiver'];   // plots of an expression given as a text, such as fplot('sin(x)', 0, 6)
-    static NAMES = [...PlotLines.CORE, ...Object.keys(PlotLines.ALIAS), ...PlotLines.FUN, ...PlotLines.STD];
+    static NOTE = ['text', 'arrow'];   // notes on the plot shown: text(x, y, 'label'), arrow(x1, y1, x2, y2 [, 'label'])
+    static NAMES = [...PlotLines.CORE, ...Object.keys(PlotLines.ALIAS), ...PlotLines.FUN, ...PlotLines.STD, ...PlotLines.NOTE];
     // The name of the plot line if the text is one call of it alone, as in  plot(x, y, 'r--'), else null. (The call must end the
     // text: an equation such as  bar(a) = f(b)  is not a plot line.)
     static isCall(src) {
@@ -87,7 +88,8 @@ class PlotLines {
         try { v = PlotLines.plain(node.compile().evaluate(PlotLines.vectorScope(ctx.scope))); }
         catch (e) { throw new Error(`'${node.toString()}': ${e.message}`); }
         if (v && v.isUnit) v = v.toSI().toNumber();
-        return { v, unit: node.isSymbolNode ? (ctx.units[node.name] || '') : '', name: node.toString(), sym: node.isSymbolNode };
+        const un = node.isSymbolNode ? node.name : (node.isAccessorNode && node.object.isSymbolNode ? node.object.name : null);   // T[3] has the display unit of the array T
+        return { v, unit: un ? (ctx.units[un] || '') : '', name: node.toString(), sym: node.isSymbolNode };
     }
     static numbers(a, what, fn) {
         const flat = Array.isArray(a.v) ? a.v : [a.v];
@@ -104,9 +106,29 @@ class PlotLines {
         const node = math.parse(src.trim());
         const args = node.args.map(a => PlotLines.arg(a, ctx));
         if (fn === 'propertyplot') return PlotLines.property(args, ctx);
+        if (PlotLines.NOTE.includes(fn)) return PlotLines.notes(fn, args);
         if (PlotLines.FUN.includes(fn)) return PlotLines.functions(fn, args, ctx);
         if (PlotLines.STD.includes(fn)) return PlotLines.standard(fn, args, ctx);
         return PlotLines.grid(PlotLines.ALIAS[fn] || fn, args, fn);
+    }
+
+    // text(x, y, 'label') and arrow(x1, y1, x2, y2 [, 'label']): annotations for the plot shown, at points of its axes (display units);
+    // the arrow goes from (x1, y1) to (x2, y2), where the head is, and the label is at its tail. The UI puts them on the plot.
+    static notes(fn, args) {
+        const nums = args.filter(a => a.text === undefined), texts = args.filter(a => a.text !== undefined), want = fn === 'text' ? 2 : 4;
+        const use = fn === 'text' ? "text(x, y, 'label'), the label centered at the point (x, y) of the axes" : "arrow(x1, y1, x2, y2) or arrow(x1, y1, x2, y2, 'label'), from (x1, y1) to (x2, y2) where the head is; the label is at the tail";
+        if (nums.length !== want || texts.length !== (fn === 'text' ? 1 : texts.length) || texts.length > 1 || args.some((a, k) => (a.text !== undefined) !== (k >= want)))
+            throw new Error(`${fn}(): use ${use}`);
+        const c = nums.map(a => {
+            const v = a.v;
+            if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${fn}(): '${a.name}' must be a single number (a point of the plot's axes)`);
+            return PlotLines.fromSI(v, a.unit);
+        });
+        const label = texts.length ? texts[0].text : '';
+        const ann = fn === 'text'
+            ? { x: c[0], y: c[1], text: label, showarrow: false, xref: 'x', yref: 'y' }
+            : { x: c[2], y: c[3], ax: c[0], ay: c[1], axref: 'x', ayref: 'y', xref: 'x', yref: 'y', text: label, showarrow: true, arrowhead: 2, arrowwidth: 1.5 };
+        return { notes: [ann], note: fn === 'text' ? `text '${label}' at (${c[0]}, ${c[1]})` : `arrow from (${c[0]}, ${c[1]}) to (${c[2]}, ${c[3]})` };
     }
 
     // ---- the standard plots, from arrays (or scalars) given by name or as expressions of the results ----

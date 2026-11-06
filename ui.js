@@ -610,7 +610,7 @@ document.addEventListener('DOMContentLoaded', () => {
             displayModeBar: true,
             responsive: true,
             modeBarButtonsToRemove: ['toImage'],
-            edits: { legendPosition: true, legendText: true, axisTitleText: true }   // click an axis title to retype it
+            edits: PLOT_EDITS   // click an axis title or a note to retype it; drag a note, or the head or tail of its arrow
         };
 
         // Handle plot overlay vs fresh plot redraw
@@ -635,7 +635,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // A plot line (propertyplot, contourplot, heatmapplot, surfaceplot; plots.js), drawn from a set of results in SI.
     // It replaces the plot shown; log x and log y follow the diagram (log P on P-h, for example).
-    function drawPlotLine(src, values, noUnit) {   // noUnit: names (kept on the command line) whose values are plain, in SI
+    const PLOT_EDITS = { legendPosition: true, legendText: true, axisTitleText: true, annotationText: true, annotationPosition: true, annotationTail: true };
+    // Notes: why the plot shown cannot take one (null if it can)
+    function noNotes(pc) {
+        if (!pc.data || !pc.data.length) return 'there is no plot to put a note on: draw one first';
+        if (pc.data.some(t => /3d|surface|pie|polar|mesh/.test(t.type || '') || t.type === 'sankey')) return 'notes go on the flat (x, y) plots, not on 3-D, polar or pie plots';
+        return null;
+    }
+    function noteStyle(pc) { const c = (pc._fullLayout && pc._fullLayout.font && pc._fullLayout.font.color) || '#222'; return { font: { color: c }, arrowcolor: c }; }
+    // text(...) and arrow(...) lines: put on the plot shown (positions on a log axis are given to Plotly as logarithms)
+    function addNotes(src, values, noUnit) {
+        const { sc, units } = PlotLines.scope(values, (k) => (noUnit && noUnit.has(k)) ? '' : unitOf(k));
+        const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units });
+        const pc = document.getElementById('plot-container'), why = noNotes(pc);
+        if (why) throw new Error(why);
+        const lx = pc._fullLayout.xaxis.type === 'log', ly = pc._fullLayout.yaxis.type === 'log';
+        const fix = (v, log) => { if (!log) return v; if (!(v > 0)) throw new Error(`a note on a log axis needs a positive position, not ${v}`); return Math.log10(v); };
+        const list = out.notes.map((a) => {
+            const b = Object.assign({}, a, noteStyle(pc)); b.x = fix(a.x, lx); b.y = fix(a.y, ly);
+            if (a.ax !== undefined) { b.ax = fix(a.ax, lx); b.ay = fix(a.ay, ly); }
+            return b;
+        });
+        Plotly.relayout(pc, { annotations: (pc.layout.annotations || []).concat(list) });
+        return out.note;
+    }
+    function drawPlotLine(src, values, noUnit) {
+        if (PlotLines.NOTE.includes(PlotLines.isCall(src))) return addNotes(src, values, noUnit);   // noUnit: names (kept on the command line) whose values are plain, in SI
         const { sc, units } = PlotLines.scope(values, (k) => (noUnit && noUnit.has(k)) ? '' : unitOf(k));
         const out = PlotLines.build(src, { scope: BoundedSolver.prototype.createScopeWithCoolProp(sc), units, unc: (curUnc() || {}).u });
         if (!plotStyle.saved) plotStyle.saved = { logX: plotStyle.logX, logY: plotStyle.logY };   // put back for the next table plot
@@ -644,18 +669,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const pc = document.getElementById('plot-container');
         Plotly.purge(pc);
         Plotly.newPlot(pc, out.data, Object.assign({ margin: { t: out.layout.title ? 35 : 25, r: 25, l: 55, b: 45 } }, out.layout),
-            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'], edits: { legendPosition: true, legendText: true, axisTitleText: true } });
+            { displayModeBar: true, responsive: true, modeBarButtonsToRemove: ['toImage'], edits: PLOT_EDITS });
         const st = plotStyleUpdate();
         if (out.three || out.polar) Object.keys(st).forEach(k => { if (/^[xy]axis\./.test(k)) delete st[k]; });
         Plotly.relayout(pc, st);
         return out.note;
     }
     function drawPlotLines(list, values) {
-        list.forEach(pl => {
+        const isNote = (pl) => PlotLines.NOTE.includes(PlotLines.isCall(pl.src));
+        [...list.filter(pl => !isNote(pl)), ...list.filter(isNote)].forEach(pl => {   // the notes go on the plot after it is drawn
             try { console.log(`Plot, line ${pl.lineNo}: ${drawPlotLine(pl.src, values)}.`); }
             catch (err) { console.error(`Plot, line ${pl.lineNo}: ${err.message}`); }
         });
-        if (list.length > 1) console.log(`${list.length} plot lines: the Plot pane shows the last. Type another one on the command line to show it.`);
+        const nplots = list.filter(pl => !isNote(pl)).length;
+        if (nplots > 1) console.log(`${nplots} plot lines: the Plot pane shows the last. Type another one on the command line to show it.`);
     }
 
     // ==========================================
@@ -1009,6 +1036,19 @@ document.addEventListener('DOMContentLoaded', () => {
         parametricContainer.innerHTML = '';
         lastTable = null;
         console.log("Parametric table cleared.");
+    });
+
+    // Add Note: a text with an arrow in the middle of the plot; drag the text to move it, the arrowhead to aim it, click the text to retype it
+    document.getElementById('btn-add-note').addEventListener('click', () => {
+        const pc = document.getElementById('plot-container'), why = noNotes(pc);
+        if (why) { console.warn('Add Note: ' + why + '.'); return; }
+        const xr = pc._fullLayout.xaxis.range, yr = pc._fullLayout.yaxis.range;
+        const a = Object.assign({ x: (xr[0] + xr[1]) / 2, y: (yr[0] + yr[1]) / 2, xref: 'x', yref: 'y', text: 'note', showarrow: true, arrowhead: 2, arrowwidth: 1.5, ax: -60, ay: -50 }, noteStyle(pc));
+        Plotly.relayout(pc, { annotations: (pc.layout.annotations || []).concat([a]) });
+    });
+    document.getElementById('btn-clear-notes').addEventListener('click', () => {
+        const pc = document.getElementById('plot-container');
+        if (pc.data) Plotly.relayout(pc, { annotations: [] });
     });
 
     document.getElementById('btn-clear-plot').addEventListener('click', () => {
