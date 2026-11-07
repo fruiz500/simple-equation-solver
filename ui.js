@@ -1564,9 +1564,26 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             entries(text).forEach(run);
         });
+        // The order of solution (solver.js blockOrder), with the values of the last Solve in the units of the Variables pane
+        function blockOrder(target) {
+            const res = currentResults();
+            const value = (n) => {
+                const v = res && res.get(n);
+                if (typeof v !== 'number' || !Number.isFinite(v)) return '';
+                const u = unitOf(n) || inferredKept.get(n) || '';
+                return fmtNum(toDisp(n, v)) + (u && u !== '-' ? ` [${u}]` : '');   // dimensionless: no unit
+            };
+            try {
+                const p = new EESParser(); p.parse(editor.value);
+                console.log(new BoundedSolver(p.parsedASTs, p.variables, p.odeCalls).blockOrder(editor.value.split('\n'), target, value) +
+                    (res ? '' : '\n(Press Solve to see the values here.)'));
+            } catch (err) { console.error('blockorder: ' + err.message.replace(/^blockorder: /, '')); }
+        }
         function run(src) {
             console.log('> ' + src);
             if (src === '?') { listShortcuts(); return; }
+            const bo = /^blockorder\s*(?:\(\s*'?\s*([\w[\], ]*?)\s*'?\s*\)|\s+(\S+))?\s*$/.exec(src);   // blockorder, blockorder x_2, blockorder(x_2)
+            if (bo) { blockOrder(bo[1] || bo[2] || ''); return; }
             if (PlotLines.isCall(src)) {   // a plot line: drawn from the last Solve and from what the command line has kept (x = linspace(0, 1, 20))
                 const res = currentResults(), vals = new Map(res || []), mine = new Set();
                 Object.keys(kept).forEach((k) => { const v = kept[k]; if (typeof v !== 'function' && !(v && v.isNode)) { vals.set(k, v); mine.add(k); } });

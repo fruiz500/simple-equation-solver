@@ -306,6 +306,105 @@ class BoundedSolver {
         return blocks;
     }
 
+    /**
+     * The order of solution as text, for the console command blockorder. Without target: the steps in the order Solve takes
+     * them. With target (a variable, or an array name for all its elements): a tree from that variable back to the inputs, each
+     * equation followed by the unknowns it needs, a branch shown once ("see above"). The equations a duplicate line writes are
+     * one step. lines: the source lines (lineNo counts from 1); value(name): its value as text, or '' when there are no results.
+     */
+    blockOrder(lines = [], target = '', value = () => '') {
+        const eqs = this.parsedASTs;
+        if (!eqs.length) return 'There are no equations.';
+        const blocks = this.partitionEquations();
+        // steps: blocks, with the single equations of one duplicate line merged
+        const raw = blocks.map(b => b.type === 'single' ? { kind: 'single', eq: [b.eqIndex], vars: [b.targetVar] }
+            : b.type === 'simultaneous' ? { kind: 'together', eq: b.eqIndices, vars: b.vars } : { kind: 'check', eq: [b.eqIndex], vars: [] });
+        const merge = (list) => {
+            const byLine = new Map(), out = [];
+            list.forEach(s => {
+                const ln = eqs[s.eq[0]].lineNo;
+                if (s.kind !== 'single' || !ln || eqs.filter(q => q.lineNo === ln).length < 2) { out.push(s); return; }
+                const m = byLine.get(ln);
+                if (m) { m.eq.push(...s.eq); m.vars.push(...s.vars); } else { const n = { ...s, eq: [...s.eq], vars: [...s.vars] }; byLine.set(ln, n); out.push(n); }
+            });
+            return out;
+        };
+        const graph = (steps) => {
+            const of = new Map(); steps.forEach((s, k) => s.vars.forEach(v => of.set(v, k)));
+            steps.forEach((s, k) => { const d = new Set(); s.eq.forEach(i => eqs[i].vars.forEach(v => { const j = of.get(v); if (j !== undefined && j !== k) d.add(j); })); s.deps = [...d]; s.needs = [...new Set(s.eq.flatMap(i => eqs[i].vars))].filter(v => of.get(v) !== k); });
+            return of;
+        };
+        // order the merged steps after what they need, keeping Solve's order otherwise; if merging made a loop, do not merge
+        const sorted = (steps) => {
+            const out = [], done = new Set(), busy = new Set();
+            const go = (k) => { if (done.has(k)) return true; if (busy.has(k)) return false; busy.add(k); for (const j of steps[k].deps) if (!go(j)) return false; busy.delete(k); done.add(k); out.push(steps[k]); return true; };
+            for (let k = 0; k < steps.length; k++) if (!go(k)) return null;
+            return out;
+        };
+        let steps = merge(raw); graph(steps);
+        let order = sorted(steps);
+        if (!order) { steps = raw.map(s => ({ ...s })); graph(steps); order = sorted(steps) || steps; }
+        steps = order; const of = graph(steps);
+
+        const short = (t) => t.length > 100 ? t.slice(0, 97) + '...' : t;
+        const src = (i) => {   // the line as typed (comments cut), or the parsed text when the line is not whole
+            const q = eqs[i], t = q.lineNo && lines[q.lineNo - 1] !== undefined ? lines[q.lineNo - 1].replace(/\/\/.*$/, '').trim() : '';
+            const bal = (t.match(/[([]/g) || []).length === (t.match(/[)\]]/g) || []).length;
+            return short(t && bal ? t : (q.lineRaw || ''));
+        };
+        const where = (s) => this.eqLabel(s.eq);
+        const names = (vs) => {   // T[1], T[2], ..., T[9] -> T[1] to T[9]; other elements of one array -> first, ..., last (n elements)
+            const out = [], arr = new Map();
+            vs.forEach(v => { const m = /^(\w+)\[([^\]]+)\]$/.exec(v); if (m) { if (!arr.has(m[1])) { arr.set(m[1], []); out.push(m[1] + '[]'); } arr.get(m[1]).push(m[2]); } else out.push(v); });
+            const txt = out.map(o => {
+                if (!o.endsWith('[]')) return o;
+                const b = o.slice(0, -2), ix = arr.get(b), el = (k) => `${b}[${k}]`;
+                if (ix.every(k => /^\d+$/.test(k))) { const n = ix.map(Number).sort((a, c) => a - c); if (n.length > 2 && n[n.length - 1] - n[0] === n.length - 1) return `${el(n[0])} to ${el(n[n.length - 1])}`; }
+                return ix.length > 3 ? `${el(ix[0])}, ..., ${el(ix[ix.length - 1])} (${ix.length} elements)` : ix.map(el).join(', ');
+            });
+            return txt.length > 12 ? txt.slice(0, 12).join(', ') + `, and ${txt.length - 12} more` : txt.join(', ');
+        };
+        const withValue = (s) => { if (s.vars.length !== 1) return names(s.vars); const t = value(s.vars[0]); return s.vars[0] + (t ? ' = ' + t : ''); };
+        const isInput = (s) => s.kind === 'single' && s.eq.length === 1 && eqs[s.eq[0]].vars.length === 1;
+        const body = (s) => {   // where the step is and what it is
+            const texts = [...new Set(s.eq.map(src))];
+            if (s.kind === 'together') return `${where(s)}, solved together (${s.eq.length} equations):\n` + texts.slice(0, 20).map(t => '      ' + t).join('\n') + (texts.length > 20 ? `\n      ... ${texts.length - 20} more` : '');
+            return `${where(s)}   ${texts[0]}${s.eq.length > 1 ? `   (${s.eq.length} equations, duplicate)` : ''}${isInput(s) ? '   (input)' : ''}${/^ode\b/.test(eqs[s.eq[0]].lineRaw || '') ? '   (ode block)' : ''}`;
+        };
+
+        if (!target) {
+            const n = steps.filter(s => s.kind !== 'check').length;
+            const out = [`Order of solution: ${eqs.length} equation(s) in ${n} step(s)${steps.some(s => s.kind === 'together') ? '; equations solved together are coupled' : ''}. blockorder <variable> traces one back to the inputs.`];
+            let k = 0;
+            steps.forEach(s => {
+                if (s.kind === 'check') { out.push(`   check: ${body(s)}   (no unknown left: it must hold)`); return; }
+                k++;
+                out.push(s.kind === 'together' ? `${String(k).padStart(3)}. ${names(s.vars)}: ${body(s)}` : `${String(k).padStart(3)}. ${withValue(s)}: ${body(s)}`);
+            });
+            return out.join('\n');
+        }
+
+        const t = String(target).trim();
+        const roots = [...new Set([...of.keys()].filter(v => v === t || v.startsWith(t + '[')).map(v => of.get(v)))];
+        if (!roots.length) throw new Error(`blockorder: ${t} is not a variable of the equations`);
+        const out = [`How ${t} is found, from the goal back to the inputs ("needs" lists the unknowns an equation uses):`], shown = new Set();
+        let count = 0;
+        const node = (k, depth, label) => {
+            if (++count > 400) { if (count === 401) out.push('  ... (the tree is cut here)'); return; }
+            const s = steps[k], pad = '  '.repeat(depth);
+            if (shown.has(k) && !isInput(s)) { out.push(`${pad}${label}: see above (${where(s)})`); return; }   // an input is one line: repeated
+            shown.add(k);
+            out.push(`${pad}${label}: ${body(s).replace(/\n/g, '\n' + pad)}`);
+            // the unknowns this step needs, each once, grouped by the step that gives them
+            const by = new Map();
+            s.needs.forEach(v => { const j = of.get(v); if (j === undefined) return; if (!by.has(j)) by.set(j, []); by.get(j).push(v); });
+            by.forEach((vs, j) => node(j, depth + 1, 'needs ' + label1(vs)));
+        };
+        const label1 = (vs) => { if (vs.length !== 1) return names(vs); const tv = value(vs[0]); return vs[0] + (tv ? ' = ' + tv : ''); };
+        roots.forEach(k => node(k, 0, label1(steps[k].vars.filter(v => v === t || v.startsWith(t + '[')))));
+        return out.join('\n');
+    }
+
     checkEquation(eqIndex, state) {
         const { leftAST, rightAST, lineRaw } = this.parsedASTs[eqIndex];
         const scope = this.createScopeWithCoolProp(state);
