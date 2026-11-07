@@ -30,7 +30,7 @@ dimensional consistency; and the results can be swept in parametric tables, opti
 on property diagrams with the saturation dome, and copied into reports as typeset equations.
 
 SES runs entirely in a web browser. There is nothing to install, no account, and no server
-that sees the student's work: a laptop running any operating system, a Chromebook or a phone
+that sees the student's work (except for the optional assistant, which sends questions to the provider the student chooses): a laptop running any operating system, a Chromebook or a phone
 is enough. It is free software under the GNU GPL, version 3 or later, and is available at
 <https://simplesolver.org/app>.
 
@@ -100,7 +100,7 @@ computed by the program and checked again by its test suite.
 - **Command line.** A Matlab-like console built on math.js [@mathjs], with matrices, complex
   and arbitrary-precision numbers, fitting and statistics.
 - **Assistant.** An optional AI assistant, used with the student's own key for a provider of
-  their choice or a model running on his/her computer. It sees the equations and results, and
+  their choice or a model running on their computer. It sees the equations and results, and
   equations it proposes are checked on a copy — parsed, checked for units and solved — before
   the student decides whether to insert them.
 
@@ -109,9 +109,15 @@ and change it. More than 1,700 automated checks, run in Node.js and in a headles
 compare its property values, correlations and numerical methods with published data, and
 check every example in the help.
 
+# Origin and use in teaching
+
+SES began as an experiment on vibe-coding. I chose to make an app inspired by Engineering Equation Solver (EES) because recent versions of EES crash recent MacIntosh machines when run under Wine or Crossover. It is being prepared for use at the senior-graduate course "Design of Termal Systems" next semester, which has used EES for years. A formal evaluation of learning outcomes has not been done.
+
 # Acknowledgements
 
-AI USAGE: Much of the code, tests and documentation was written with the
+AI usage disclosure
+
+Much of the code, tests and documentation was written with the
 assistance of an AI model (Anthropic's Claude), directed, reviewed and tested by the author,
 who is responsible for all of it.
 
