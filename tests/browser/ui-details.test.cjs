@@ -66,6 +66,15 @@ const { open } = require('../lib/browser.cjs');
     editorHidden: document.getElementById('editor-box').hidden, label: document.getElementById('btn-format').textContent, body: document.getElementById('formatted-body').textContent }));
   ok('Formatted: 2 equations as MathML, 3 block lines as text, comment left out, editor hidden', fv.maths === 2 && fv.texts === 3 && fv.editorHidden && fv.label === 'Text' && !/comment/.test(fv.body), fv);
   ok('each equation carries its LaTeX for copying', (await pg.$$eval('#formatted-body .fe-eq', es => es.map(e => e.dataset.tex)))[0] === '{h}_{2} = {h}_{1} - \\eta \\cdot \\left({h}_{1} - {h}_{\\mathrm{2s}}\\right)\\quad \\left[\\mathrm{kJ/kg}\\right]', await pg.$$eval('#formatted-body .fe-eq', es => es.map(e => e.dataset.tex)));
+  // Copy MD: only the equations, as $$ blocks; the plain Copy still gives LaTeX lines
+  await app.ctx.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+  await pg.click('#btn-copy-md'); await pg.waitForTimeout(200);
+  const mdClip = await pg.evaluate(() => navigator.clipboard.readText()).catch(() => '');
+  ok('Copy MD: each equation between $$, blank line between, nothing else', mdClip === '$${h}_{2} = {h}_{1} - \\eta \\cdot \\left({h}_{1} - {h}_{\\mathrm{2s}}\\right)\\quad \\left[\\mathrm{kJ/kg}\\right]$$\n\n$$' + (await pg.$$eval('#formatted-body .fe-eq', es => es.map(e => e.dataset.tex)))[1] + '$$', mdClip);
+  ok('Copy MD: a note says so', /2 equation\(s\) copied as Markdown/.test(await pg.textContent('#fe-note')));
+  await pg.click('#btn-copy-word'); await pg.waitForTimeout(200);
+  const plainClip = await pg.evaluate(() => navigator.clipboard.readText()).catch(() => '');
+  ok('Copy: still LaTeX lines, without $$', plainClip.split('\n').length === 2 && !plainClip.includes('$$'), plainClip);
   await pg.click('#btn-format');
   ok('Text: back to the editor, text unchanged', !(await pg.$eval('#editor-box', e => e.hidden)) && (await pg.$eval('#formatted', e => e.hidden)) && (await pg.inputValue('#editor')) === fsrc);
   await pg.fill('#editor', "ode t = 0 : 10\n  y' = -k*y\n  y(0) = 1\nend\nI = integral(y^2, y, 0, 1)"); await pg.click('#btn-format');

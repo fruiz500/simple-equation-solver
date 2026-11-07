@@ -1140,6 +1140,12 @@ document.addEventListener('DOMContentLoaded', () => {
         } else navigator.clipboard.writeText(EqFormat.clipboard(items)).then(done).catch(fail);
     };
     document.getElementById('btn-copy-word').addEventListener('click', () => copyEqs(fmtItems, `${fmtItems.filter(it => it.math).length} equation(s)`));
+    document.getElementById('btn-copy-md').addEventListener('click', () => {   // text only: Markdown with the LaTeX of each equation between $$
+        const note = document.getElementById('fe-note'), md = EqFormat.markdown(fmtItems), n = fmtItems.filter(it => it.math).length;
+        if (!n) { note.textContent = 'No equations to copy.'; return; }
+        navigator.clipboard.writeText(md).then(() => { note.textContent = `${n} equation(s) copied as Markdown: paste into an AI chat or a Markdown editor.`; })
+            .catch(() => { note.textContent = 'The browser did not allow copying.'; });
+    });
     document.getElementById('formatted-body').addEventListener('click', (e) => {
         const eq = e.target.closest('.fe-eq');
         if (eq) copyEqs([fmtItems.filter(it => it.math)[[...document.querySelectorAll('#formatted-body .fe-eq')].indexOf(eq)]], 'The equation');

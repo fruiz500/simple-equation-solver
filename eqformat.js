@@ -270,6 +270,8 @@ const EqFormat = (() => {
     // (Word pastes MathML from HTML as its own equations; inline ones stay left-aligned) and, as plain text, their LaTeX
     const html = (items) => items.map(it => it.math ? `<div class="fe-eq${it.inner ? ' fe-in' : ''}" title="Click to copy this equation" data-tex="${esc(it.tex)}">${it.math}</div>` : `<pre class="fe-text">${esc(it.text)}</pre>`).join('');
     const clipboard = (items) => items.filter(it => it.math).map(it => it.tex).join('\n');
-    const clipboardHtml = (items) => items.filter(it => it.math).map(it => `<p>${it.math}</p>`).join('');
-    return { ident, identTex, equation, render, html, clipboard, clipboardHtml };
+    const clipboardHtml = (items) => items.filter(it => it.math).map(it => `<p>${it.math.replace('<math ', `<math data-tex="${esc(it.tex)}" `)}</p>`).join('');   // data-tex: the LaTeX travels with the MathML, so the Markdown editor can read the equation back exactly
+    // Markdown for an LLM chat or a Markdown editor: each equation as a $$ block, blank line between
+    const markdown = (items) => items.filter(it => it.math).map(it => `$$${it.tex}$$`).join('\n\n');
+    return { ident, identTex, equation, render, html, clipboard, clipboardHtml, markdown };
 })();
