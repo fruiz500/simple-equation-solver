@@ -162,6 +162,20 @@ Run `node run.mjs --verbose` for details, or `node run.mjs correlations` to run 
 - Uncertainty: first-order propagation for independent inputs, as in JCGM 100:2008, *Evaluation of measurement data — Guide to the expression of uncertainty in measurement* (GUM), Eq. 10 ([bipm.org](https://www.bipm.org/en/committees/jc/jcgm/publications)).
 - Interpolation: monotone piecewise cubic (pchip), after F. N. Fritsch and R. E. Carlson, *SIAM J. Numer. Anal.* 17(2), 238–246, 1980.
 
+## Contributing and support
+
+**Bug reports and questions.** Open an issue at <https://github.com/fruiz500/simple-equation-solver/issues>. For a bug, include the equations that trigger it, which `Solve` or plot step fails, the browser, and the message in the Console pane. A Share link (the **Share** button) that reproduces the problem is the quickest way to show it.
+
+**Feature requests.** Open an issue too. SES aims to stay a simple solver, so requests are weighed against that: a feature that most thermodynamics and heat-transfer students would use is more likely to be added than a specialized one.
+
+**Contributing code.** Fork the repository, make the change, and open a pull request. There is no build step: edit the files and open `index.html`. Every fix should come with a regression test in `tests/`. Run the relevant test files before opening the pull request, or the whole suite with:
+
+    cd tests && node run.mjs
+
+See `tests/README.md` for how the engine and browser tests are organized.
+
+**Getting help using SES.** The Help button in the app has worked examples for every feature, and the AI assistant (with your own API key) can explain error messages and suggest how to set up a problem.
+
 ## License
 
 Copyright © 2026 Francisco Ruiz.
