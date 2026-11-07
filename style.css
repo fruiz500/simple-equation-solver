@@ -316,11 +316,11 @@ button.teal:hover { background-color: #117a8b; }
 #editor-buttons {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 5px;
 }
 
-#editor-buttons button {
-    padding: 6px 10px;
+#editor-buttons button {   /* narrow enough that the ten buttons stay on one row at 1366 x 768 */
+    padding: 6px 8px;
     font-size: var(--fs-small);
 }
 

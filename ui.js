@@ -428,7 +428,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.guess))}" data-var="${name}" data-field="guess" title="Starting value of ${name} for the solver" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.lower))}" placeholder="-inf" data-var="${name}" data-field="lower" title="Lower bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
                 <td style="padding:2px;"><input type="number" step="any" value="${inputNum(disp(meta.upper))}" placeholder="inf" data-var="${name}" data-field="upper" title="Upper bound of ${name} (blank: none)" style="width:100px; text-align:center;"></td>
-                <td style="padding:2px; white-space:nowrap;"><input type="text" value="${meta.unit || ''}" placeholder="${inferredOf(name, meta) || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input. Ctrl+D (or the arrow beside it) copies it to the next row; Ctrl+Shift+D (or Shift+click on the arrow) to every row below with the same dimensions" style="width:100px; text-align:center;"><button type="button" class="fill-down" tabindex="-1" title="Copy this unit to the next row (Ctrl+D); Shift+click: to every row below with the same dimensions (Ctrl+Shift+D)">&darr;</button></td>
+                <td style="padding:2px; white-space:nowrap;"><input type="text" value="${String(meta.unit || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}" placeholder="${inferredOf(name, meta) || '[-]'}" data-var="${name}" data-field="unit" title="Unit of ${name} for display and input. Ctrl+D (or the arrow beside it) copies it to the next row; Ctrl+Shift+D (or Shift+click on the arrow) to every row below with the same dimensions" style="width:100px; text-align:center;"><button type="button" class="fill-down" tabindex="-1" title="Copy this unit to the next row (Ctrl+D); Shift+click: to every row below with the same dimensions (Ctrl+Shift+D)">&darr;</button></td>
                 <td class="val" style="padding:2px 4px;">${solvedDisplay}</td>`;
             if (showUnc) {
                 const g = parser.uncertain.get(name), u = uc && uc.u.get(name), td = document.createElement('td');
@@ -1267,6 +1267,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return { text: eq + '\n\n/*@SESSION\n' + json + '\n@*/\n', withResults };
         }
 
+        const UNIT_TEXT = /^[\w\s\/^*.()\-+%°µ·]{0,40}$/;   // what a unit can be written with: kJ/(kg K), m^3/kg, degC, %
         function restore(session, eq) {
             parser.variables = new Map(); parser.saved = new Map();   // start clean: no guesses left over from the previous file
             try { parser.parse(eq); }
@@ -1279,7 +1280,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (typeof s.guess === 'number') m.guess = s.guess;
                 m.lower = (typeof s.min === 'number') ? s.min : -Infinity;
                 m.upper = (typeof s.max === 'number') ? s.max : Infinity;
-                m.unit = s.unit || '';
+                m.unit = (typeof s.unit === 'string' && UNIT_TEXT.test(s.unit)) ? s.unit : '';   // a file or a link is not trusted
                 if (valid && s.value !== undefined && s.value !== null) { m.value = s.value; nRes++; }
             });
             lastResults = null;
@@ -1321,6 +1322,74 @@ document.addEventListener('DOMContentLoaded', () => {
             lastName = name; savedText = editor.value;
             console.log(`Saved '${name}': ` + (withResults ? 'equations and results.' : 'equations only (the results are out of date, so they were not saved; Solve first to include them).'));
         });
+
+        // --- Share link: the equations and the variable settings packed into the part of the address after #, which the browser
+        // never sends to the server. #s1= deflate-compressed, #u1= plain (browsers without CompressionStream); both base64url of
+        // JSON { e: equations, v: { name: [guess, min, max, unit] } } with only the settings that differ from the defaults.
+        // No results and no AI keys go in a link. Opening one loads the problem without solving it.
+        const b64u = {
+            enc: (bytes) => { let s = ''; bytes.forEach(b => { s += String.fromCharCode(b); }); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); },
+            dec: (t) => { const s = atob(t.replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, c => c.charCodeAt(0)); },
+        };
+        const pipe = async (bytes, stream) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer());
+        async function packShare(eq, vars) {
+            const json = new TextEncoder().encode(JSON.stringify({ e: eq, v: vars }));
+            if (typeof CompressionStream === 'function') return 's1=' + b64u.enc(await pipe(json, new CompressionStream('deflate-raw')));
+            return 'u1=' + b64u.enc(json);
+        }
+        async function unpackShare(hash) {
+            const m = /^#?(s1|u1)=([A-Za-z0-9_-]+)$/.exec(hash || '');
+            if (!m) return null;
+            let bytes = b64u.dec(m[2]);
+            if (m[1] === 's1') {
+                if (typeof DecompressionStream !== 'function') throw new Error('this browser cannot open compressed links; update it, or ask for the .ses file');
+                bytes = await pipe(bytes, new DecompressionStream('deflate-raw'));
+            }
+            const o = JSON.parse(new TextDecoder().decode(bytes));
+            if (!o || typeof o.e !== 'string') throw new Error('the link holds no equations');
+            return o;
+        }
+        function shareVars() {
+            const v = {};
+            parser.variables.forEach((m, name) => {
+                const g = finite(m.guess), lo = finite(m.lower), hi = finite(m.upper), u = m.unit || '';
+                if ((g === null || g === 1) && lo === null && hi === null && !u) return;   // the defaults: left out
+                v[name] = [g, lo, hi, u];
+            });
+            return v;
+        }
+        const SHARE_LONG = 8000;   // some mail and chat programs cut longer links
+        document.getElementById('btn-share').addEventListener('click', async () => {
+            const eq = norm(editor.value);
+            if (!eq) { console.warn('Share link: there are no equations to share.'); return; }
+            try { parser.parse(editor.value); } catch (e) { /* the settings of the last good parse are shared */ }
+            let link;
+            try { link = location.href.replace(/#.*$/, '') + '#' + await packShare(eq, shareVars()); }
+            catch (e) { console.error('Share link: ' + e.message); return; }
+            if (/^file:/.test(location.href)) console.warn('Share link: this copy of SES is opened from a file on this computer, so the link opens only here. Open SES from its web address to share with others.');
+            let copied = false;
+            try { await navigator.clipboard.writeText(link); copied = true; } catch (e) { }
+            console.log(`Share link (${link.length} characters, equations and settings, no results)${copied ? ', copied to the clipboard' : ''}:\n${link}`);
+            if (!copied) console.warn('The browser did not allow copying: select the link above and copy it.');
+            if (link.length > SHARE_LONG) console.warn(`This link is long: some mail and chat programs cut links of more than about ${SHARE_LONG} characters. Send the .ses file (Save...) if it does not open.`);
+        });
+        async function openShared() {
+            let o;
+            try { o = await unpackShare(location.hash); } catch (e) { console.error('This shared link could not be opened: ' + e.message + '.'); return; }
+            if (!o) return;
+            if (editor.value.trim() && !sameText(editor.value, savedText) && !sameText(editor.value, o.e) &&
+                !window.confirm('Open the shared equations? The equations now in the editor are not saved and will be replaced.')) return;
+            editor.value = o.e.replace(/\s+$/, '') + '\n';
+            savedText = editor.value;
+            const vars = {};
+            Object.entries(o.v || {}).forEach(([k, a]) => { if (Array.isArray(a)) vars[k] = { guess: a[0], min: a[1], max: a[2], unit: a[3] || '' }; });
+            restore({ hash: hash(norm(editor.value)), vars }, editor.value);
+            try { history.replaceState(null, '', location.href.replace(/#.*$/, '')); } catch (e) { }   // a reload keeps the edits that follow
+            editor.dispatchEvent(new Event('input'));
+            console.log(`Opened a shared problem (${norm(editor.value).split('\n').length} lines). Press Solve.`);
+        }
+        openShared();
+        window.addEventListener('hashchange', openShared);
 
         // --- Export results: Variable <TAB> Value <TAB> Unit, in the units shown in the Variables pane ---
         let lastResultsName = 'results.txt';
