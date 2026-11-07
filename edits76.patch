@@ -1,0 +1,164 @@
+diff --git a/help.html b/help.html
+index 407bdfe..4ef2a28 100644
+--- a/help.html
++++ b/help.html
+@@ -75,7 +75,7 @@ derivative(x^3 - 12*x, x)               // 3 * x ^ 2 - 12
+ simplify(2*x + 3*x)                     // 5 * x
+ 5 ft to m                               // 1.524 m (math.js units work here)
+ lusolve([4, 1; 1, 3], [1; 2])</code></pre>
+-<p><b>Large numbers and many digits.</b> The equations work with ordinary numbers (about 16 significant digits, up to about 1.8e308). On the command line, <code>bignumber()</code> gives arbitrary precision: <code>factorial(bignumber(1000))</code> gives 1000! to 64 significant digits, and after <code>digits(3000)</code> it gives all 2568 digits exactly. <code>digits(n)</code> sets the number of significant digits of bignumber arithmetic (64 at the start); functions such as <code>log</code> and <code>exp</code> of bignumbers work to about 1000 digits. In the equations, use logarithms for such numbers: <code>factorialln(n)</code>. Floating point is arbitrary too: after <code>digits(210)</code>, <code>acos(bignumber(-1))</code> gives pi to 200 decimals. Build such numbers from <code>bignumber()</code> of a whole number or a quoted text (<code>bignumber('0.1')</code>); the constants <code>pi</code> and <code>e</code> and plain decimals like <code>0.1</code> are ordinary numbers of about 16 digits. Non-integer <code>gamma</code> and <code>erf</code> are not available for bignumbers.</p>
++<p><b>Large numbers and many digits.</b> The equations work with ordinary numbers (about 16 significant digits, up to about 1.8e308). On the command line, <code>digits(n)</code> sets the number of significant digits (64 at the start). With <code>n</code> from 17 to 1000, everything you type there is computed with <code>n</code> digits: after <code>digits(60)</code>, <code>pi</code>, <code>e</code>, <code>1/3</code>, <code>sqrt(2)</code>, <code>ln(2)</code> and <code>sin(1)</code> give 60 digits, and a number you type is exact. <code>digits(16)</code> goes back to ordinary numbers. Some lines need ordinary numbers: property functions, correlations, your functions, <code>interpolate</code>, <code>gamma</code> of a non-integer and <code>erf</code>, and a result of Solve with more than 15 digits mixed with a bignumber (a result like <code>10000</code> mixes fine). Those lines are computed with ordinary numbers and the console says why. <code>bignumber()</code> gives arbitrary precision explicitly: <code>factorial(bignumber(1000))</code> gives 1000! to 64 significant digits, and after <code>digits(3000)</code> it gives all 2568 digits exactly. Above 1000 digits only <code>bignumber()</code> arithmetic keeps them, because <code>pi</code>, <code>e</code> and the logarithms of bignumbers stop at about 1000 digits. In the equations, use logarithms for such numbers: <code>factorialln(n)</code>. Take care with <code>bignumber(x)</code> of an ordinary number computed to 16 digits, such as <code>bignumber(pi)</code> or <code>bignumber(1/3)</code>: it cannot hold more (the console says so); use <code>digits(n)</code> and write <code>pi</code> or <code>1/3</code> as they are, or give the digits as a quoted text (<code>bignumber('0.1')</code>).</p>
+ <p><code>derivative</code>, <code>simplify</code> and <code>rationalize</code> take the formula with or without quotes. math.js simplification is limited: it does not, for example, cancel <code>(x^2 - 1)/(x - 1)</code>. The command line does not change the equations or the results.</p>
+ <p id="solveorder"><b>The order of solution.</b> <code>solveorder</code> on the command line lists the steps in the order Solve takes them: each equation with the unknown it gives, the equations that must be solved together as one step, the equations a duplicate line writes as one step, and equations left with no unknown as checks. <code>solveorder x_2</code> (or <code>solveorder(x_2)</code>) works backward from one variable to the inputs, as on paper: each equation is followed by the unknowns it needs, and a part already shown is not repeated. An array name (<code>solveorder T</code>) takes all its elements. After Solve the values are shown, in the units of the Variables pane. For the <a href="#ex-t3">steam turbine with isentropic efficiency</a>, after Solve:</p>
+ <pre id="solveorder-out"><code>How x_2 is found, from the goal back to the inputs ("needs" lists the unknowns an equation uses):
+diff --git a/tests/README.md b/tests/README.md
+index bc623db..4d05187 100644
+--- a/tests/README.md
++++ b/tests/README.md
+@@ -72,7 +72,7 @@ The exit code is 1 if any check fails, and each failure is printed as `FAIL name
+ | browser/mobile | phone width (390 px): the panes stacked in order (Equations, Variables, Console, Table, Plot), full width, no gutters, no sideways scrolling, the jump bar, sizes left by a gutter drag ignored, Plot title not covered, Solve and a plot that fits; two columns kept at 800 and 1400 px |
+ | browser/plotlines | a plot line drawn after Solve and from the command line, log axes set by a diagram and put back after it, failures reported, Y2 axis, contour of a T[i, j] grid, several plot lines, Formatted view, standard plots after Solve and from the command line with console variables, plots of an expression, editable axis titles, Add Note and Clear Notes, text and arrow lines (units, log axes, 3-D refused) |
+ | browser/convert | the converter page opened from SES, converting, the report, Send to SES, and solving the result |
+-| browser/bignum | the console: bignumber results in full, digits(n), 1000! exactly, roots(p, 'all') with complex roots |
++| browser/bignum | the console: bignumber results in full, digits(n) making pi, e, 1/3, sqrt(2) and ln(2) full precision (17 to 1000 digits), the fall back to ordinary numbers with its reason (properties, results of Solve), the note on bignumber(pi), 1000! exactly above 1000 digits, roots(p, 'all') with complex roots |
+ | browser/units-pane | a unit of the wrong dimensions refused in the Variables pane, Ctrl+D and Ctrl+Shift+D fill down, the converter's report showing and selecting lines |
+ | browser/spec | spec lines in the page: the Console report, the ± column, a parametric table refused |
+ | browser/shortcuts | keyboard shortcuts: each key from the Equations pane, a Variables cell or the console box (F2 from a Guess cell uses the value just typed), the comment toggles and their undo, the unit arrow, ? and the help list every key, the tooltips, the warning before leaving with unsaved equations |
+diff --git a/tests/browser/bignum.test.cjs b/tests/browser/bignum.test.cjs
+index 6fb6f18..d496234 100644
+--- a/tests/browser/bignum.test.cjs
++++ b/tests/browser/bignum.test.cjs
+@@ -11,7 +11,7 @@ const { open } = require('../lib/browser.cjs');
+   c = await cmd('factorial(bignumber(1000))');
+   ok('1000! at the default 64 digits: 4.023872600770937735...e+2567', /^4\.0238726007709377354370243392300398571937486421071463254379991\d*e\+2567$/.test(c), c);
+   c = await cmd('digits(3000)');
+-  ok('digits(3000) answers what it did', /now keeps 3000 significant digits/.test(c), c);
++  ok('digits(3000) answers what it did', /bignumber\(\) arithmetic now keeps 3000 significant digits/.test(c), c);
+   c = await cmd('factorial(bignumber(1000))');
+   ok('then 1000! exactly: 2568 digits, starting 40238726 and ending in 249 zeros', /^40238726007709377354/.test(c) && c.length === 2568 && /[1-9]0{249}$/.test(c), [c.length, c.slice(-260, -240)]);
+   c = await cmd('digits(0)');
+@@ -19,7 +19,34 @@ const { open } = require('../lib/browser.cjs');
+   await cmd('digits(210)');
+   c = await cmd('acos(bignumber(-1))');
+   ok('arbitrary floating point: pi to 200 decimals from acos(bignumber(-1))', c.startsWith('3.14159265358979323846264338327950288419716939937510582097494459230781640628620899862803482534211706798214808651328230664709384460955058223172535940812848111745028410270193852110555964462294895493038196'), c.slice(0, 80));
+-  await cmd('digits(64)');
++  const pi210 = await cmd('acos(bignumber(-1))');
++  // after digits(n) above 16 every expression is computed with n digits, not only bignumber()
++  ok('pi is pi to the digits set, the same as acos(bignumber(-1))', (await cmd('pi')) === pi210 && pi210.length >= 205, pi210.length);
++  ok('e is e to the digits set: exp(1) - e is zero, and e starts 2.71828182845904523536028747135266249775724709369995', (await cmd('exp(1) - e')) === '0' && (await cmd('e')).startsWith('2.71828182845904523536028747135266249775724709369995'));
++  c = await cmd('1/3');
++  ok('1/3 has 210 digits', /^0\.3{205,}$/.test(c) && c.length >= 207, c.length);
++  ok('sqrt(2) and ln(2) have all their digits', (await cmd('sqrt(2)')).startsWith('1.4142135623730950488016887242096980785696718753769') && (await cmd('sqrt(2)')).length >= 205
++    && (await cmd('ln(2)')).startsWith('0.69314718055994530941723212145817656807550013436025525412068') && (await cmd('ln(2)')).length >= 205);
++  ok('ordinary calculations keep working: 2 + 3, 5 ft to m, a matrix inverse, an error message', (await cmd('2 + 3')) === '5' && (await cmd('5 ft to m')) === '1.524 m' && /-2, 1\], \[1\.5, -0\.5/.test(await cmd('inv([1,2;3,4])')) && /Unexpected end of expression/.test(await cmd('1 +')));
++  await app.solve('T_a = 2318.742199999999\nP_1 = 10 [kPa]');
++  c = await cmd('P_1 * pi');
++  ok('a result with a few digits (10000) mixes with pi at full precision', /^31415\.9265358979323846264338327950288419716939937510582097494459/.test(c) && c.length >= 205, c.slice(0, 60));
++  c = await app.con(); const c2 = await cmd('T_a * 2');
++  ok('a result of Solve with 16 digits cannot be mixed: ordinary numbers, with the reason', /Computed with ordinary numbers \(about 16 digits\), not 210: it uses a value of more than 15 digits/.test(await app.con()) && /4637\.48/.test(await app.con()), await app.con());
++  await cmd("enthalpy('water', 300, 101325)");
++  ok('a property function takes ordinary numbers, and the Console says so', /not 210: enthalpy\(\) takes ordinary numbers/.test(await app.con()) && /112654\.89/.test(await app.con()), await app.con());
++  c = await cmd('digits(1500)');
++  ok('above 1000 digits the console keeps ordinary numbers (pi and e stop at about 1000), and says so', /bignumber\(\) arithmetic now keeps 1500 significant digits; the rest of the console uses ordinary numbers/.test(c), c);
++  ok('then pi is an ordinary number, 2 + 3 works, and bignumber arithmetic still has the digits (factorial of 1000 is exact)', (await cmd('pi')) === '3.141592654' && (await cmd('2 + 3')) === '5' && /^4\.0238726007709377354/.test(await cmd('factorial(bignumber(1000))')));
++  c = await cmd('bignumber(pi)');
++  ok('with ordinary numbers and more than 16 digits set, bignumber(pi) explains why it has 16 digits and what to do', /3\.141592653589793$/.test(c) && /ordinary number of about 16 digits/.test(c) && /digits\(n\)/.test(c), c);
++  ok('bignumber(0.1), bignumber(7) and bignumber of a text give no note', !/ordinary number/.test(await cmd('bignumber(0.1)')) && !/ordinary number/.test(await cmd('bignumber(7)')) && !/ordinary number/.test(await cmd("bignumber('0.1')")));
++  c = await cmd('digits(1000)');
++  ok('1000 digits is the most the whole console computes with: pi has 1000 digits', /now computes with 1000 significant digits/.test(c) && (await cmd('pi')).length === 1001, c);
++  c = await cmd('digits(16)');
++  ok('digits(16) goes back to ordinary numbers', /ordinary numbers again/.test(c) && (await cmd('pi')) === '3.141592654', c);
++  ok('at 16 digits or fewer bignumber(pi) loses nothing, so there is no note', !/ordinary number of about 16/.test(await cmd('bignumber(pi)')));
++  await cmd('digits(64)'); await cmd('digits(16)');
+   c = await cmd("roots([1, -1, 1, -1], 'all')");
+   ok("roots(p, 'all') on the console lists the complex roots: -i, i, 1", /-i/.test(c) && /\bi\b/.test(c) && /1/.test(c), c);
+   ok('no uncaught page errors', app.pageErrors.length === 0, app.pageErrors);
+diff --git a/ui.js b/ui.js
+index af7dbde..9610eab 100644
+--- a/ui.js
++++ b/ui.js
+@@ -1503,7 +1503,9 @@ document.addEventListener('DOMContentLoaded', () => {
+         const input = document.getElementById('console-input');
+         if (!input) return;
+         const kept = {}, history = [];
+-        let hpos = 0;
++        let hpos = 0, bigDigits = 0;   // bigDigits: 17 to 1000 after digits(n): the console computes with BigNumbers of that many digits
++        // names that take ordinary numbers only: the property functions, correlations, user functions, interpolate (ln and digits are handled)
++        const plainFns = () => new Set(Object.keys(BoundedSolver.prototype.createScopeWithCoolProp({})).filter(k => k !== 'ln' && k !== 'digits'));   // user functions come and go
+         const SYMBOLIC = { derivative: [0, 1], simplify: [0], rationalize: [0] };   // arguments that are formulas
+         const quote = (node) => node.transform((n) => {
+             if (!(n.isFunctionNode && n.fn.isSymbolNode && SYMBOLIC[n.fn.name])) return n;
+@@ -1592,23 +1594,57 @@ document.addEventListener('DOMContentLoaded', () => {
+                 return;
+             }
+             try {
+-                const node = quote(math.parse(src));
+-                node.traverse((c) => {
+-                    if (c.isFunctionNode && c.fn.isSymbolNode && ['createUnit', 'import', 'config'].includes(c.fn.name)) {
+-                        throw new Error(`${c.fn.name}() is not available: it would change the settings of the solver`);
+-                    }
+-                });
+-                const base = {};
+-                (currentResults() || new Map()).forEach((v, k) => { base[k] = v; });
+-                const scope = Object.assign(BoundedSolver.prototype.createScopeWithCoolProp(base), kept);
+-                // digits(n): significant digits of bignumber() arithmetic (math.js's precision; 64 at the start), console only
+-                scope.digits = (n) => {
+-                    n = Number(n);
+-                    if (!(Number.isInteger(n) && n >= 1 && n <= 100000)) throw new Error('digits(): give a whole number of digits, 1 to 100000');
+-                    math.config({ precision: n });
+-                    return `bignumber() arithmetic now keeps ${n} significant digits`;
++                // One evaluation of the line. big: with math.js making every number, and pi and e, a BigNumber (digits(n) above 16)
++                const attempt = (big) => {
++                    const was = math.config().number;
++                    try {
++                        if (big) math.config({ number: 'BigNumber' });   // inside the try: if it fails, 'number' is put back
++                        const node = quote(math.parse(src));
++                        node.traverse((c) => {
++                            if (c.isFunctionNode && c.fn.isSymbolNode && ['createUnit', 'import', 'config'].includes(c.fn.name)) {
++                                throw new Error(`${c.fn.name}() is not available: it would change the settings of the solver`);
++                            }
++                        });
++                        const base = {};
++                        (currentResults() || new Map()).forEach((v, k) => { base[k] = v; });
++                        const scope = Object.assign(BoundedSolver.prototype.createScopeWithCoolProp(base), kept);
++                        // digits(n): significant digits of the console (math.js's precision; 64 at the start). From 17 to 1000 the console computes
++                        // everything with that many digits (pi, e, 1/3, sqrt(2), ...); otherwise it uses ordinary numbers, and bignumber() keeps n
++                        scope.digits = (n) => {
++                            n = Number(n);
++                            if (!(Number.isInteger(n) && n >= 1 && n <= 100000)) throw new Error('digits(): give a whole number of digits, 1 to 100000');
++                            math.config({ precision: n });
++                            bigDigits = n > 16 && n <= 1000 ? n : 0;   // pi, e and the logarithms of BigNumbers are limited to about 1000 digits
++                            return bigDigits ? `the console now computes with ${n} significant digits; digits(16) goes back to ordinary numbers`
++                                : n > 1000 ? `bignumber() arithmetic now keeps ${n} significant digits; the rest of the console uses ordinary numbers (pi, e and logarithms of bignumbers stop at about 1000 digits)`
++                                : `ordinary numbers again; bignumber() arithmetic now keeps ${n} significant digits`;
++                        };
++                        if (big) scope.ln = math.log;   // the ordinary ln is Math.log, which has 16 digits
++                        // bignumber() of an ordinary number computed to about 16 digits (pi, 1/3, sqrt(2)) cannot have more: say so
++                        scope.bignumber = (x, ...rest) => {
++                            if (typeof x === 'number' && Number.isFinite(x) && !Number.isInteger(x) && math.config().precision > 16
++                                && String(Math.abs(x)).replace(/e.*$/, '').replace(/\D/g, '').replace(/^0+/, '').length >= 15)
++                                console.warn(`  bignumber(${x}): that is an ordinary number of about 16 digits, so it cannot hold more. For more digits type digits(n) with n above 16 first, then pi, 1/3 or sqrt(2) as they are; or give the digits as text: bignumber('1.2345...').`);
++                            return math.bignumber(x, ...rest);
++                        };
++                        return { node, v: Interp.collect(() => node.compile().evaluate(scope)) };
++                    } finally { if (big) math.config({ number: was }); }
+                 };
+-                const v = Interp.collect(() => node.compile().evaluate(scope));
++                let r;
++                if (bigDigits > 16) {
++                    // properties, correlations, user functions and interpolate() take ordinary numbers: BigNumbers could give wrong answers there
++                    let plain = null; const names = plainFns();
++                    quote(math.parse(src)).traverse((c) => { if (!plain && c.isFunctionNode && c.fn.isSymbolNode && names.has(c.fn.name)) plain = c.fn.name; });
++                    let why = plain ? `${plain}() takes ordinary numbers` : '';
++                    if (!plain) {
++                        try { r = attempt(true); } catch (e) {
++                            why = /implicitly convert a number with >15/.test(e.message) ? 'it uses a value of more than 15 digits (a result of Solve, say), which cannot be mixed with BigNumbers'
++                                : e.message.replace(/\s+/g, ' ').slice(0, 110);
++                        }
++                    }
++                    if (!r) { r = attempt(false); console.warn(`  Computed with ordinary numbers (about 16 digits), not ${bigDigits}: ${why}.`); }
++                } else r = attempt(false);
++                const { node, v } = r;
+                 if (node.isAssignmentNode && node.object.isSymbolNode && !node.index) kept[node.object.name] = v;
+                 if (node.isFunctionAssignmentNode) kept[node.name] = v;
+                 console.log('  ' + show(v));

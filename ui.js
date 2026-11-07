@@ -1503,7 +1503,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const input = document.getElementById('console-input');
         if (!input) return;
         const kept = {}, history = [];
-        let hpos = 0;
+        let hpos = 0, bigDigits = 0;   // bigDigits: 17 to 1000 after digits(n): the console computes with BigNumbers of that many digits
+        // names that take ordinary numbers only: the property functions, correlations, user functions, interpolate (ln and digits are handled)
+        const plainFns = () => new Set(Object.keys(BoundedSolver.prototype.createScopeWithCoolProp({})).filter(k => k !== 'ln' && k !== 'digits'));   // user functions come and go
         const SYMBOLIC = { derivative: [0, 1], simplify: [0], rationalize: [0] };   // arguments that are formulas
         const quote = (node) => node.transform((n) => {
             if (!(n.isFunctionNode && n.fn.isSymbolNode && SYMBOLIC[n.fn.name])) return n;
@@ -1564,8 +1566,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             entries(text).forEach(run);
         });
-        // The order of solution (solver.js blockOrder), with the values of the last Solve in the units of the Variables pane
-        function blockOrder(target) {
+        // The order of solution (solver.js solveOrder), with the values of the last Solve in the units of the Variables pane
+        function solveOrder(target) {
             const res = currentResults();
             const value = (n) => {
                 const v = res && res.get(n);
@@ -1575,15 +1577,15 @@ document.addEventListener('DOMContentLoaded', () => {
             };
             try {
                 const p = new EESParser(); p.parse(editor.value);
-                console.log(new BoundedSolver(p.parsedASTs, p.variables, p.odeCalls).blockOrder(editor.value.split('\n'), target, value) +
+                console.log(new BoundedSolver(p.parsedASTs, p.variables, p.odeCalls).solveOrder(editor.value.split('\n'), target, value) +
                     (res ? '' : '\n(Press Solve to see the values here.)'));
-            } catch (err) { console.error('blockorder: ' + err.message.replace(/^blockorder: /, '')); }
+            } catch (err) { console.error('solveorder: ' + err.message.replace(/^solveorder: /, '')); }
         }
         function run(src) {
             console.log('> ' + src);
             if (src === '?') { listShortcuts(); return; }
-            const bo = /^blockorder\s*(?:\(\s*'?\s*([\w[\], ]*?)\s*'?\s*\)|\s+(\S+))?\s*$/.exec(src);   // blockorder, blockorder x_2, blockorder(x_2)
-            if (bo) { blockOrder(bo[1] || bo[2] || ''); return; }
+            const bo = /^solveorder\s*(?:\(\s*'?\s*([\w[\], ]*?)\s*'?\s*\)|\s+(\S+))?\s*$/.exec(src);   // solveorder, solveorder x_2, solveorder(x_2)
+            if (bo) { solveOrder(bo[1] || bo[2] || ''); return; }
             if (PlotLines.isCall(src)) {   // a plot line: drawn from the last Solve and from what the command line has kept (x = linspace(0, 1, 20))
                 const res = currentResults(), vals = new Map(res || []), mine = new Set();
                 Object.keys(kept).forEach((k) => { const v = kept[k]; if (typeof v !== 'function' && !(v && v.isNode)) { vals.set(k, v); mine.add(k); } });
@@ -1592,23 +1594,57 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             try {
-                const node = quote(math.parse(src));
-                node.traverse((c) => {
-                    if (c.isFunctionNode && c.fn.isSymbolNode && ['createUnit', 'import', 'config'].includes(c.fn.name)) {
-                        throw new Error(`${c.fn.name}() is not available: it would change the settings of the solver`);
-                    }
-                });
-                const base = {};
-                (currentResults() || new Map()).forEach((v, k) => { base[k] = v; });
-                const scope = Object.assign(BoundedSolver.prototype.createScopeWithCoolProp(base), kept);
-                // digits(n): significant digits of bignumber() arithmetic (math.js's precision; 64 at the start), console only
-                scope.digits = (n) => {
-                    n = Number(n);
-                    if (!(Number.isInteger(n) && n >= 1 && n <= 100000)) throw new Error('digits(): give a whole number of digits, 1 to 100000');
-                    math.config({ precision: n });
-                    return `bignumber() arithmetic now keeps ${n} significant digits`;
+                // One evaluation of the line. big: with math.js making every number, and pi and e, a BigNumber (digits(n) above 16)
+                const attempt = (big) => {
+                    const was = math.config().number;
+                    try {
+                        if (big) math.config({ number: 'BigNumber' });   // inside the try: if it fails, 'number' is put back
+                        const node = quote(math.parse(src));
+                        node.traverse((c) => {
+                            if (c.isFunctionNode && c.fn.isSymbolNode && ['createUnit', 'import', 'config'].includes(c.fn.name)) {
+                                throw new Error(`${c.fn.name}() is not available: it would change the settings of the solver`);
+                            }
+                        });
+                        const base = {};
+                        (currentResults() || new Map()).forEach((v, k) => { base[k] = v; });
+                        const scope = Object.assign(BoundedSolver.prototype.createScopeWithCoolProp(base), kept);
+                        // digits(n): significant digits of the console (math.js's precision; 64 at the start). From 17 to 1000 the console computes
+                        // everything with that many digits (pi, e, 1/3, sqrt(2), ...); otherwise it uses ordinary numbers, and bignumber() keeps n
+                        scope.digits = (n) => {
+                            n = Number(n);
+                            if (!(Number.isInteger(n) && n >= 1 && n <= 100000)) throw new Error('digits(): give a whole number of digits, 1 to 100000');
+                            math.config({ precision: n });
+                            bigDigits = n > 16 && n <= 1000 ? n : 0;   // pi, e and the logarithms of BigNumbers are limited to about 1000 digits
+                            return bigDigits ? `the console now computes with ${n} significant digits; digits(16) goes back to ordinary numbers`
+                                : n > 1000 ? `bignumber() arithmetic now keeps ${n} significant digits; the rest of the console uses ordinary numbers (pi, e and logarithms of bignumbers stop at about 1000 digits)`
+                                : `ordinary numbers again; bignumber() arithmetic now keeps ${n} significant digits`;
+                        };
+                        if (big) scope.ln = math.log;   // the ordinary ln is Math.log, which has 16 digits
+                        // bignumber() of an ordinary number computed to about 16 digits (pi, 1/3, sqrt(2)) cannot have more: say so
+                        scope.bignumber = (x, ...rest) => {
+                            if (typeof x === 'number' && Number.isFinite(x) && !Number.isInteger(x) && math.config().precision > 16
+                                && String(Math.abs(x)).replace(/e.*$/, '').replace(/\D/g, '').replace(/^0+/, '').length >= 15)
+                                console.warn(`  bignumber(${x}): that is an ordinary number of about 16 digits, so it cannot hold more. For more digits type digits(n) with n above 16 first, then pi, 1/3 or sqrt(2) as they are; or give the digits as text: bignumber('1.2345...').`);
+                            return math.bignumber(x, ...rest);
+                        };
+                        return { node, v: Interp.collect(() => node.compile().evaluate(scope)) };
+                    } finally { if (big) math.config({ number: was }); }
                 };
-                const v = Interp.collect(() => node.compile().evaluate(scope));
+                let r;
+                if (bigDigits > 16) {
+                    // properties, correlations, user functions and interpolate() take ordinary numbers: BigNumbers could give wrong answers there
+                    let plain = null; const names = plainFns();
+                    quote(math.parse(src)).traverse((c) => { if (!plain && c.isFunctionNode && c.fn.isSymbolNode && names.has(c.fn.name)) plain = c.fn.name; });
+                    let why = plain ? `${plain}() takes ordinary numbers` : '';
+                    if (!plain) {
+                        try { r = attempt(true); } catch (e) {
+                            why = /implicitly convert a number with >15/.test(e.message) ? 'it uses a value of more than 15 digits (a result of Solve, say), which cannot be mixed with BigNumbers'
+                                : e.message.replace(/\s+/g, ' ').slice(0, 110);
+                        }
+                    }
+                    if (!r) { r = attempt(false); console.warn(`  Computed with ordinary numbers (about 16 digits), not ${bigDigits}: ${why}.`); }
+                } else r = attempt(false);
+                const { node, v } = r;
                 if (node.isAssignmentNode && node.object.isSymbolNode && !node.index) kept[node.object.name] = v;
                 if (node.isFunctionAssignmentNode) kept[node.name] = v;
                 console.log('  ' + show(v));

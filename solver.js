@@ -307,12 +307,12 @@ class BoundedSolver {
     }
 
     /**
-     * The order of solution as text, for the console command blockorder. Without target: the steps in the order Solve takes
+     * The order of solution as text, for the console command solveorder. Without target: the steps in the order Solve takes
      * them. With target (a variable, or an array name for all its elements): a tree from that variable back to the inputs, each
      * equation followed by the unknowns it needs, a branch shown once ("see above"). The equations a duplicate line writes are
      * one step. lines: the source lines (lineNo counts from 1); value(name): its value as text, or '' when there are no results.
      */
-    blockOrder(lines = [], target = '', value = () => '') {
+    solveOrder(lines = [], target = '', value = () => '') {
         const eqs = this.parsedASTs;
         if (!eqs.length) return 'There are no equations.';
         const blocks = this.partitionEquations();
@@ -374,7 +374,7 @@ class BoundedSolver {
 
         if (!target) {
             const n = steps.filter(s => s.kind !== 'check').length;
-            const out = [`Order of solution: ${eqs.length} equation(s) in ${n} step(s)${steps.some(s => s.kind === 'together') ? '; equations solved together are coupled' : ''}. blockorder <variable> traces one back to the inputs.`];
+            const out = [`Order of solution: ${eqs.length} equation(s) in ${n} step(s)${steps.some(s => s.kind === 'together') ? '; equations solved together are coupled' : ''}. solveorder <variable> traces one back to the inputs.`];
             let k = 0;
             steps.forEach(s => {
                 if (s.kind === 'check') { out.push(`   check: ${body(s)}   (no unknown left: it must hold)`); return; }
@@ -386,7 +386,7 @@ class BoundedSolver {
 
         const t = String(target).trim();
         const roots = [...new Set([...of.keys()].filter(v => v === t || v.startsWith(t + '[')).map(v => of.get(v)))];
-        if (!roots.length) throw new Error(`blockorder: ${t} is not a variable of the equations`);
+        if (!roots.length) throw new Error(`solveorder: ${t} is not a variable of the equations`);
         const out = [`How ${t} is found, from the goal back to the inputs ("needs" lists the unknowns an equation uses):`], shown = new Set();
         let count = 0;
         const node = (k, depth, label) => {
