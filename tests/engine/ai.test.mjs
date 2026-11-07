@@ -184,5 +184,23 @@ ok('settings and key survive a reload', again.cfg.provider === 'anthropic' && JS
 out = await say(make([{ text: 'x' }]), 'insert');
 ok('AI: insert with nothing to insert says how equations arrive', /No answer so far held a block of equations/.test(out), out);
 out = await say(make([{ text: 'x' }]), '');
-ok('AI: alone prints the commands', /AI: <question>/.test(out) && /AI: insert/.test(out), out);
+ok('AI: alone prints the commands', /AI: <question>/.test(out) && /AI: insert/.test(out) && /AI: copy/.test(out), out);
+
+// AI: copy: for a chat on a provider's web site, with no key; nothing is sent
+{
+    let clip = null; const calls = [];
+    const c = A.create({ fetch: async (...x) => { calls.push(x); return {}; }, local: mem(), session: mem(), env: E, copy: async (t) => { clip = t; },
+        context: () => ({ equations: 'P_1 = 10 [kPa]', results: [{ name: 'P_1', value: 10, unit: 'kPa' }], settings: [], messages: [] }), setEquations() { } });
+    await c.command('setup key KEY-COPY-55');
+    out = await (async () => { const i = logs.length; await c.command('copy'); return since(i); })();
+    ok('AI: copy copies the instructions with all the guidance, then the state, ready for the question, and sends nothing', clip !== null && calls.length === 0
+        && /^Follow these instructions in this conversation/.test(clip) && clip.includes(A.systemPrompt('', true)) && /three or more values/.test(clip)
+        && /```ses\nP_1 = 10 \[kPa\]\n```/.test(clip) && /P_1 = 10 \[kPa\]$/m.test(clip) && /<\/ses-state>\n\n$/.test(clip) && !/KEY-COPY-55/.test(clip), (clip || '').slice(0, 120));
+    ok('AI: copy says what to do with the answer', /^Copied the instructions and the state of SES \(\d+ characters\)/m.test(out) && /paste them into the Equations pane, then Check and Solve/.test(out), out);
+    const n = A.create({ fetch: async () => ({}), local: mem(), session: mem(), env: E, copy: async () => { throw new Error('denied'); }, context: () => ({ equations: 'x = 1' }), setEquations() { } });
+    out = await (async () => { const i = logs.length; await n.command('copy'); return since(i); })();
+    ok('when copying is not allowed, AI: copy prints the text to select', /^Follow these instructions/m.test(out) && /did not allow copying/.test(out) && /^That is the instructions/m.test(out), out.slice(-300));
+    const q = make([{ text: 'ok' }]); await say(q, 'setup key K'); await say(q, 'copy the energy balance into a table');
+    ok('a question that starts with copy is a question', q.calls.length === 1, q.calls.length);
+}
 done();

@@ -80,8 +80,8 @@ const SESAI = (() => {
     // Added only when the question is about symbolic work, so that the other questions do not carry it
     const SYMBOLIC_RE = /deriv|differentiat|integra|antiderivative|symbolic|simplif|identity|prove|expand|factor|closed form/i;
     const SYMBOLIC = ' SES can differentiate a written-out formula (derivative(expression, x)) and integrate numerically (integral()), but cannot simplify, integrate or solve symbolically: do that yourself, step by step, then give a ses block comparing your result with derivative() or integral() (an identity: both sides) at three or more values, not with a finite difference. Show the differences and say only that they should be near zero, within rounding, with no size. In derivative() the variable is a plain or subscripted name (x, x_1), not x[1]; never name a variable e or pi.';
-    function systemPrompt(question) {
-        const symbolic = SYMBOLIC_RE.test(String(question || '')) ? SYMBOLIC : '';
+    function systemPrompt(question, allGuidance) {   // allGuidance: the symbolic guidance whatever the question (AI: copy)
+        const symbolic = (allGuidance || SYMBOLIC_RE.test(String(question || ''))) ? SYMBOLIC : '';
         const names = (typeof ThermoEngine !== 'undefined' && ThermoEngine.FUNCS) ? Object.keys(ThermoEngine.FUNCS).join(', ') : '';
         let corr = '';
         if (typeof CORRELATIONS !== 'undefined') {
@@ -271,6 +271,7 @@ Questions on any subject are welcome (other engineering and science, mathematics
             console.log('AI: <question>   ask about the equations, the results or the problem (the equations and last results go with it; AI: show prints exactly what is sent)\n' +
                 'AI: new          start a new conversation        AI: stop      cancel the request in progress\n' +
                 'AI: insert       put the last proposed equations in the Equations pane (or click the link under the answer)\n' +
+                'AI: copy         copy the instructions and the state of SES, to paste into a chat with any AI on its web site (no key needed)\n' +
                 'AI: setup        show the settings; then  provider <anthropic|openai|gemini|openrouter|ollama|custom>,  key <key>,  model <name>,\n' +
                 '                 url <address> (ollama, custom),  models [filter] (list the models),  rounds <0-5>,  remember on|off,  forget (erase keys and settings)');
         }
@@ -321,6 +322,18 @@ Questions on any subject are welcome (other engineering and science, mathematics
             console.log(`Sent to ${P.label}, model ${o.model || '(not chosen)'}, at ${(o.base || '(no address)')}; the key is sent only as the provider's header.\n` +
                 `Conversation so far: ${history.length / 2} exchange(s) (AI: new clears it). A request is the instructions, then the conversation, then the new question with the state:\n\n` +
                 `--- instructions (${sys.length} characters) ---\n${sys}\n\n--- new question ---\n${turn}\n--- end ---`);
+        }
+
+        // For a chat on a provider's web site, with no key: the instructions (with all the guidance, since the questions are not
+        // known yet) and the state, to paste there; the user's question follows them. Nothing is sent from here.
+        async function copy() {
+            const text = 'Follow these instructions in this conversation. After them comes the current state of SES (Simple Equation Solver), then my question.\n\n' +
+                systemPrompt('', true) + '\n\n' + buildTurn('', deps.context());
+            let copied = false;
+            try { await (deps.copy ? deps.copy(text) : navigator.clipboard.writeText(text)); copied = true; } catch (e) { }
+            if (!copied) { console.log(text); console.warn('The browser did not allow copying: select the text above and copy it.'); }
+            console.log(`${copied ? 'Copied' : 'That is'} the instructions and the state of SES (${text.length} characters). Paste ${copied ? 'them' : 'it'} into a chat with any AI and type your question after ${copied ? 'them' : 'it'}. ` +
+                'Equations in its answer come in a block marked ses: paste them into the Equations pane, then Check and Solve; SES does not check them first, as it does for AI: questions. Copy again after you change the equations or Solve.');
         }
 
         async function ask(prompt) {
@@ -383,6 +396,7 @@ Questions on any subject are welcome (other engineering and science, mathematics
             if (w.length === 1 && first === 'help') return help();
             if (w.length === 1 && first === 'new') { history = []; console.log('New conversation.'); return; }
             if (w.length === 1 && first === 'show') return show();
+            if (w.length === 1 && first === 'copy') return copy();
             if (w.length === 1 && first === 'stop') { if (busy) busy.abort(); else console.log('Nothing is in progress.'); return; }
             if (first === 'insert' && w.length <= 2) return insert(w[1]);
             if (first === 'setup' && (w.length === 1 || SUBS.includes(w[1].toLowerCase()))) { try { await setup(arg); } catch (e) { console.error(e.message); } return; }

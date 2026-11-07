@@ -70,7 +70,14 @@ const { open } = require('../lib/browser.cjs');
   c = await app.con();
   ok('AI: setup shows the settings without the key', /provider anthropic/.test(c) && /key set/.test(c) && !/sk-ant/.test(c), c);
   await cmd('AI: setup forget');
+  const reqsBefore = reqs.length;
   ok('forget erases the key from the browser', await pg.evaluate(() => !localStorage.getItem('ses-ai-keys') && !localStorage.getItem('ses-ai')));
+  // AI: copy: no key needed; the clipboard gets the instructions and the state of the page
+  await app.ctx.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+  await pg.fill('#editor', 'P_1 = 10 [kPa]\nT_1 = saturationtemperature(\'water\', P_1)'); await app.clear(); await cmd('AI: copy');
+  await waitFor(/Copied the instructions|did not allow copying/);
+  const clip = await pg.evaluate(() => navigator.clipboard.readText()).catch(() => '');
+  ok('AI: copy, with no key, puts the instructions and the equations of the pane on the clipboard', /^Follow these instructions/.test(clip) && /HOW TO PROPOSE EQUATIONS/.test(clip) && clip.includes("T_1 = saturationtemperature('water', P_1)") && reqs.length === reqsBefore, clip.slice(0, 100));
   ok('an ordinary expression still works on the command line', await (async () => { await app.clear(); await cmd('2+3'); await pg.waitForTimeout(100); return /  5\n/.test(await app.con()); })());
   ok('no uncaught page errors', app.pageErrors.length === 0, app.pageErrors);
   await app.b.close();
