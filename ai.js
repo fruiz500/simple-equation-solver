@@ -102,7 +102,7 @@ P_1 = 10 [kPa]          // condenser pressure
 h_1 = enthalpy('water', 'P', P_1, 'Q', 0)
 \`\`\`
   When the user inserts it, it replaces the pane, so keep the user's existing lines and comments unless you change them. Nothing but equations and comments in that block; explain outside it, briefly.
-- The number of equations must equal the number of unknowns. List every input with its value and unit. Comment the source of data and the assumptions with //.
+- The number of equations must equal the number of unknowns. List every input with its value and unit at the top of the block, before the equations. Comment the source of data and the assumptions with //.
 - Guesses, bounds and display units are set by the user in the Variables pane, not in the equations. When a property function needs a good starting value, say so in your text (for example: set the guess of T_2 to about 400 K).
 - Do not invent property data: use the property functions, or give the source in a comment. Use only the functions listed below; if unsure what the arguments of one are, say so instead of guessing.
 - SES checks a proposed block on a copy (syntax, units, Solve) and may send you the problems to fix. Reply to those with the complete corrected block.

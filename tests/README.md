@@ -79,7 +79,9 @@ The exit code is 1 if any check fails, and each failure is printed as `FAIL name
 | browser/ai | the AI assistant in the page with a mock provider: the key neither echoed nor recalled, the state sent, the check of a proposal, the insert link and its undo |
 | browser/uncertainty | the Uncertainty box: the note when not ticked, the help example's published ± values, the ± column, the breakdown of a result, results dropped after an edit, the Formatted view |
 | browser/units-syntax | declared units and a continued table in the page; the start-up notice |
+| browser/examples-page | the Examples page of the landing site: every help example on it, and each link, opened in the app, puts exactly that example in the editor; the three whose guesses the link sets give their published results |
 | tools/help-results | not a test: computes rows for a help.html result table, e.g. `node tools/help-results.mjs ex-a1 q_fin` |
+| tools/examples-page | not a test: writes examples.html for the landing site from the help examples, each with a Share-style link, e.g. `node tools/examples-page.mjs ../examples.html`; run it again when the examples change |
 
 Error-message checks compare the key wording, so rewording a message means updating its pattern.
 The browser test serves the CDN libraries from `node_modules`, so it runs offline with the same versions.

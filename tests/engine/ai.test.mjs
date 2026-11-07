@@ -40,10 +40,11 @@ ok('the Gemini model list asks with the key in a header', A.modelsRequest('gemin
 const sys = A.systemPrompt();
 ok('instructions list the functions that exist, with arguments', /enthalpy,/.test(sys) && /nu_gnielinski\(Re, Pr, f\?\)/.test(sys) && !/undefined|\[object/.test(sys), sys.slice(0, 200));
 ok('instructions tell how to return equations (a ses block) and that SES computes', /fenced block tagged ses/.test(sys) && /SES computes/.test(sys));
+ok('instructions put the inputs first, where they are easily seen (some models listed them last)', /every input with its value and unit at the top of the block, before the equations/.test(sys));
 ok('the assistant is not confined to thermodynamics and heat transfer: any subject is welcome', /any other engineering, science or mathematics problem/.test(sys) && /do not refuse one for being outside thermodynamics or heat transfer/.test(sys) && !/say that this assistant is for SES/.test(sys));
 const symSys = A.systemPrompt('derive the derivative of x^2*sin(x) and check it numerically');
 ok('the symbolic guidance is added only to questions about symbolic work, and kept short', /derivative\(expression, x\)/.test(symSys) && /three or more values/.test(symSys) && /never name a variable e or pi/.test(symSys) && !/three or more values/.test(sys) && !/three or more values/.test(A.systemPrompt('why does Solve not converge?')) && symSys.length - sys.length < 700, symSys.length - sys.length);
-ok('instructions stay compact: under 11 000 characters (10 900 now), under 11 600 with the symbolic guidance (11 465 now); every addition must pay for itself', sys.length < 11000 && symSys.length < 11600, [sys.length, symSys.length]);
+ok('instructions stay compact: under 11 000 characters (10 949 now), under 11 600 with the symbolic guidance (11 511 now); every addition must pay for itself', sys.length < 11000 && symSys.length < 11600, [sys.length, symSys.length]);
 const turn = A.buildTurn('why?', { equations: 'x = 1', results: [{ name: 'x', value: 1, unit: 'm' }], settings: ['x: guess 2'], messages: ['ERROR: boom'] });
 ok('the turn carries equations, results with units, settings, messages and the question', /```ses\nx = 1\n```/.test(turn) && /x = 1 \[m\]/.test(turn) && /x: guess 2/.test(turn) && /ERROR: boom/.test(turn) && /why\?$/.test(turn), turn);
 ok('without results the turn says so', /no current results/.test(A.buildTurn('q', { equations: 'x=1', results: [] })));
